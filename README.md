@@ -50,13 +50,13 @@ There are three main steps to run NVBitFI. We provide a sample script (test.sh) 
 ## Step 0: Setup
 
  * One-time only: Copy NVBitFI package to tool directory in NVBit installation (see the above commands) 
- * One-time only: Build the injector and profiler tools (see Step 0 (2) in test.sh)
- * One-time only: Run and collect golden stdout and stderr files for each of the applications (see Step 0 (3) in test.sh). 
+ * Every time we run an injection campaign: Setup environment (see Step 0 (2) in test.sh)
+ * One-time only: Build the injector and profiler tools (see Step 0 (3) in test.sh)
+ * One-time only: Run and collect golden stdout and stderr files for each of the applications (see Step 0 (4) in test.sh). 
     * Record fault-free outputs: Record golden output file (as golden.txt), stdout (as golden\_stdout.txt), and stderr (as golden\_stderr.txt) in the workload directory (e.g., nvbitfi/test-apps/simple\_add).
     * Create application-specific scripts: Create run.sh and sdc\_check.sh scripts in workload directory. Instead of using absolute paths, please use environment variables for paths such as BIN\_DIR, APP\_DIR, and DATASET\_DIR. These variables are set in set\_env function in scripts/common\_functions.py. See the scripts in the nvbitfi/test-apps/simple\_add directory for examples.
     * Workloads will be run from logs/workload-name/run-name directory. It would be great if the workload can run from this directory. If the program requires input files to be in a specific location, either update the workload or provide soft links to the input files in appropriate locations. 
-    * The program output should be deterministic. Please exclude non-deterministic values (e.g., runtimes) from the file if they are present in one of the output files (see test-apps/simple\_add/sdc\_check.sh for more details). 
- * Every time we run an injection campaign: Setup environment (see Step 0 (4) in test.sh)
+    * The program output should be deterministic. Please exclude non-deterministic values (e.g., runtimes) from the file if they are present in one of the output files (see test-apps/simple\_add/sdc\_check.sh for more details).
 
 ## Step 1: Profile and generate injection list
 
@@ -83,7 +83,7 @@ Use the scripts/parse\_results.py script to parse the results. This script gener
 
 # NVBitFI vs. SASSIFI
 
-NVBitFI benefits from the featured offered by NVBit. It can run on newer GPUs (e.g., Turing and Volta GPUs). It works with pre-compiled libraries also, unlike SASSIFI. NVBitFI is expected to be faster than SASSIFI as it instruments just the a single chosen dynamic kernel (SASSIFI, as it was implemented, instrumented all dynamic kernels) for the injection runs.  As of now, NVBitFI implements a subset of the error injection models and we may be expanding this over time (users are more than welcome to contribute). 
+NVBitFI benefits from the featured offered by NVBit. It can run on newer GPUs (e.g., Turing and Volta GPUs). It works with pre-compiled libraries also, unlike SASSIFI. NVBitFI is expected to be faster than SASSIFI as it instruments just a single chosen dynamic kernel (SASSIFI, as it was implemented, instrumented all dynamic kernels) for the injection runs.  As of now (April 14, 2020), NVBitFI implements a subset of the error injection models and we may be expanding this over time (users are more than welcome to contribute). 
 
 
 
