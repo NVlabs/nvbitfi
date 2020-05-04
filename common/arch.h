@@ -20,6 +20,8 @@
 
 #define NUM_COUNTERS NUM_INST_GROUPS+NUM_ISA_INSTRUCTIONS
 
+// new inst: FSEL
+
 enum InstructionType { 
  // Floating point instructions
  FADD = 0,
@@ -31,6 +33,7 @@ enum InstructionType {
  FMNMX,
  FMUL,
  FMUL32I,
+ FSEL,
  FSET,
  FSETP,
  FSWZADD,
@@ -53,8 +56,11 @@ enum InstructionType {
  HSETP2,
  // Integer Instructions
  IDP,
+ IDP4A,
  BFE,
  BFI,
+ BMSK,
+ BREV,
  FLO,
  IADD,
  IADD3,
@@ -98,11 +104,14 @@ enum InstructionType {
  F2I,
  I2F,
  I2I,
+ I2IP,
+ FRND,
  // Move Instructions
  MOV,
  MOV32I,
  PRMT,
  SEL,
+ SGXT,
  SHFL,
  // Predicate/CC Instructions
  CSET,
@@ -133,11 +142,14 @@ enum InstructionType {
  STG,
  STL,
  STS,
+ MATCH,
+ QSPC,
  ATOM,
  ATOMS,
  RED,
  CCTL,
  CCTLL,
+ ERRBAR,
  MEMBAR,
  CCTLT,
  SUATOM,
@@ -164,14 +176,20 @@ enum InstructionType {
  LONGJMP,
  PLONGJMP,
  KIL,
+ BSSY,
+ BSYNC,
+ BREAK,
+ BMOV,
  BPT,
  IDE,
  RAM,
  RTT,
  SAM,
+ RPCMOV,
+ WARPSYNC,
+ YIELD,
+ NANOSLEEP,
  // Miscellaneous Instructions
- BSSY, 
- BSYNC,
  NOP,
  CS2R,
  S2R,
@@ -185,6 +203,8 @@ enum InstructionType {
  GETLMEMBASE,
  SETCRSPTR,
  SETLMEMBASE,
+ PMTRIG,
+ SETCTAID,
  NUM_ISA_INSTRUCTIONS
  };
 
