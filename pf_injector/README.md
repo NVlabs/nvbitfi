@@ -1,0 +1,16 @@
+# Experimental feature: Simulate ISA-level permanent hardware errors
+
+User should select a SM, hardware lane, bit-mask, and opcode for a permanent error injection run. Errors will be injected into all dynamic instances of the specified opcode in the specified lane and SM.
+
+pf_injector.so expects nvbitfi-injection-info.txt file to be present in the current working directory.  This file should contain four things (one per line): 
+* SM ID: 0-Max SMs in the GPU being used
+* Lane ID: 0-31
+* Mask: uint32 number used to inject error into the destination register (corrupted value = Mask XOR original value)
+* opcode ID: 0-171 (see enum InstructionType in common/arch.h for the mapping). 171: all opcodes.
+
+Set `TOOL_VERBOSE=1` to print more information about the injection run in the console output.
+
+Example usage: `LD_PRELOAD=<path-to-so>/pf_injector.so <path-to-workload>/simple_add; cat nvbitfi-injection-log-temp.txt`
+
+A sample nvbitfi-injection-info.txt is provided to test the tool on the provided simple_add test-app. 
+
