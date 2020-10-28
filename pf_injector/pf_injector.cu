@@ -130,6 +130,14 @@ void nvbit_at_init() {
     } else {
       verbose = 0;
     }
+		
+    if (getenv("INPUT_INJECTION_INFO")) {
+			injInputFilename = getenv("INPUT_INJECTION_INFO");
+		}
+    if (getenv("OUTPUT_INJECTION_LOG")) {
+			injOutputFilename = getenv("OUTPUT_INJECTION_LOG");
+		}
+
     // GET_VAR_INT(verbose, "TOOL_VERBOSE", 0, "Enable verbosity inside the tool (1, 2, 3,..)");
 
     initInstTypeNameMap();
