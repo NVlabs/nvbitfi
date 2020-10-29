@@ -22,4 +22,4 @@ Set `INPUT_INJECTION_INFO` for custom input file name and path. Default is nvbit
 
 Set `OUTPUT_INJECTION_LOG` for custom output file name and path. Default is nvbitfi-injection-log-temp.txt in the directory where the application is being launched. 
 
-
+Instrumenting all the kernels for permanent error injection can make the application too slow (and non-operational for some). One can limit the number of dynamic kernels that will be instrumented and observe errors by setting `INSTRUMENTATION_LIMIT` to 1 or 10, for example.
