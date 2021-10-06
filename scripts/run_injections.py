@@ -118,8 +118,7 @@ def run_multiple_injections_igid(app, inj_mode, igid, where_to_run):
 			total_jobs += 1
 			if total_jobs > p.THRESHOLD_JOBS: 
 				break; # no need to run more jobs
-
-                        l = line.strip().split() #Example: _Z24bpnn_adjust_weights_cudaPfiS_iS_S_ 0 1297034 0.877316323856 0.214340876321
+			l = line.strip().split() #Example: _Z24bpnn_adjust_weights_cudaPfiS_iS_S_ 0 1297034 0.877316323856 0.214340876321
 			if len(l) >= 5: 
 				# print (line) 
 				[kcount, iid, opid, bid] = l[-4:] # obtains params for this injection
@@ -143,16 +142,16 @@ def run_multiple_injections_igid(app, inj_mode, igid, where_to_run):
 # wrapper function to call either RF injections or instruction level injections
 ###############################################################################
 def run_multiple_injections(app, inj_mode, where_to_run):
-	if inj_mode == p.RF_MODE:
-		run_multiple_injections_igid(app, inj_mode, "rf", where_to_run)
-        else:
-            igid_list = []
-            if inj_mode == p.INST_VALUE_MODE:
-		igid_list = p.inst_value_igid_bfm_map
-	    elif inj_mode == p.INST_ADDRESS_MODE:
-		igid_list = p.inst_address_igid_bfm_map
-            for igid in igid_list: 
-		run_multiple_injections_igid(app, inj_mode, igid, where_to_run)
+    if inj_mode == p.RF_MODE:
+        run_multiple_injections_igid(app, inj_mode, "rf", where_to_run)
+    else:
+        igid_list = []
+        if inj_mode == p.INST_VALUE_MODE:
+            igid_list = p.inst_value_igid_bfm_map
+        if inj_mode == p.INST_ADDRESS_MODE:
+            igid_list = p.inst_address_igid_bfm_map
+        for igid in igid_list: 
+            run_multiple_injections_igid(app, inj_mode, igid, where_to_run)
 
 ###############################################################################
 # Starting point of the execution
