@@ -21,19 +21,23 @@
 #include "arch.h"
 
 // Global counters are incremented once per warp 
-extern "C" __device__ __noinline__ void count_instrs(uint64_t pcounters, int index, int grp_index, int num_counters) {    
+extern "C" __device__ __noinline__ void count_instrs(uint64_t pcounters, int index, int grp_index, int predicate, int num_counters) {    
 	// Optimization: Instead of all the threads in a warp performing atomicAdd,
-	// let's count the number of active threads in a warp and let just one thread
+	// let's count the number of active threads with predicate=1 in a warp and let just one thread
 	// (leader) in the warp perform the atomicAdd
-	unsigned int active = __activemask();
-	int leader = __ffs(active) - 1;
+	const unsigned int active_mask = __activemask();
+	const int leader = __ffs(active_mask) - 1;
+
+  /* compute the predicate mask */
+  const int predicate_mask = ballot(predicate);
 
 	uint64_t *counters = (uint64_t*)pcounters;
 	if (threadIdx.x %32 == leader) { // Am I the leader thread
-		int numActive = __popc(active);
-		atomicAdd((unsigned long long *)&counters[index], numActive);
-		atomicAdd((unsigned long long *)&counters[NUM_ISA_INSTRUCTIONS+grp_index], numActive);
-		atomicAdd((unsigned long long *)&counters[num_counters-2], numActive*(grp_index != G_NODEST));
-		atomicAdd((unsigned long long *)&counters[num_counters-1], numActive*(1 - ((grp_index == G_NODEST) || (grp_index == G_PR))));
+  	/* count all the active thread */
+  	const int num_threads = __popc(predicate_mask);
+		atomicAdd((unsigned long long *)&counters[index], num_threads);
+		atomicAdd((unsigned long long *)&counters[NUM_ISA_INSTRUCTIONS+grp_index], num_threads);
+		atomicAdd((unsigned long long *)&counters[num_counters-2], num_threads*(grp_index != G_NODEST));
+		atomicAdd((unsigned long long *)&counters[num_counters-1], num_threads*(1 - ((grp_index == G_NODEST) || (grp_index == G_PR))));
 	}
 }

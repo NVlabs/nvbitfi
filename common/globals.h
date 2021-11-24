@@ -53,13 +53,16 @@ __managed__ uint64_t counters[NUM_COUNTERS]; // instruction counters
 
 uint64_t get_inst_count(bool profiler=false) {
 	uint64_t sum2 = 0;
-	for (int i=NUM_ISA_INSTRUCTIONS; i<NUM_COUNTERS-2; i++) { // TODO: 2 here is G_GPPR and G_GP 
+	for (int i=NUM_ISA_INSTRUCTIONS; i<NUM_COUNTERS-2; i++) { // TODO: 2 here is for G_GPPR and G_GP 
 		sum2 += counters[i];
 	}
 	if (profiler) {
 		uint64_t sum1 = 0;
 		for (int i=0; i<NUM_ISA_INSTRUCTIONS; i++) {
 			sum1 += counters[i];
+		}
+		if (sum1!=sum2){
+			std::cout<< "sum1=" << sum1 << " sum2=" << sum2 << "\n";
 		}
 		assert (sum1 == sum2);
 	}

@@ -41,7 +41,7 @@ __device__ unsigned int get_mask(uint32_t bitFlipModel, float bitIDSeed, unsigne
 }
 
 extern "C" __device__ __noinline__ void inject_error(uint64_t piinfo, uint64_t pcounters, uint64_t pverbose_device, 
-			int offset, int index, int grp_index, int destGPRNum, int regval, 
+			int offset, int index, int grp_index,  int predicate, int destGPRNum, int regval, 
 			int numDestGPRs, int destPRNum1, int destPRNum2, int maxRegs) {
 
 	inj_info_t* inj_info = (inj_info_t*)piinfo; 
@@ -58,6 +58,11 @@ extern "C" __device__ __noinline__ void inject_error(uint64_t piinfo, uint64_t p
  	if (!inj_info->areParamsReady)
  		return; // This is not the selected kernel. No need to proceed.
  
+	// Proceed only if the instruction is not predicated out, i.e., proceed only if the the predicate value is 1. 
+	// We do not want to inject an error into the instruction that's predicated out.
+	if (predicate == 0)
+		return;
+
  	unsigned long long currCounter1 = atomicAdd((unsigned long long *)&counters[NUM_ISA_INSTRUCTIONS+grp_index], 1);
  	unsigned long long currCounter2 = atomicAdd((unsigned long long *)&counters[NUM_COUNTERS-2], (grp_index != G_NODEST));
  	unsigned long long currCounter3 = atomicAdd((unsigned long long *)&counters[NUM_COUNTERS-1], 1 - ((grp_index == G_NODEST) || (grp_index == G_PR)));
@@ -68,7 +73,7 @@ extern "C" __device__ __noinline__ void inject_error(uint64_t piinfo, uint64_t p
  			(igid < G_NODEST &&  grp_index != igid)) // this is not the instruction from the selected group
  		return; // This is not the selected intruction group 
   
-  	bool injectFlag = false;
+	bool injectFlag = false;
  	switch (igid) {
  		case G_FP32: // inject into one of the dest reg 
  		case G_FP64: // inject into one of the regs written by the inst
