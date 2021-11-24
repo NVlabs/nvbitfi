@@ -2,6 +2,8 @@
 
 NVBitFI provides an automated framework to perform error injection campaigns for GPU application resilience evaluation.  NVBitFI builds on top of [**NV**IDIA **Bi**nary **I**nstrumentation **T**ool (NVBit)](https://github.com/NVlabs/NVbit), which is a research prototype of a dynamic binary instrumentation library for NVIDIA GPUs. NVBitFI offers functionality that is similar to a prior tool called [SASSIFI](https://github.com/NVlabs/sassifi).  
 
+Please refer to our [NVBitFI paper](https://ieeexplore.ieee.org/abstract/document/9505068) for additional details about the tool and some experimental results.
+
 # Summary of NVBitFI's capabilities 
 
 NVBitFI injects errors into the destination register values of a dynamic thread-instruction by instrumenting instructions after they are executed.  A dynamic instruction is selected at random from all dynamic kernels of a program for error injection.  Only one error is injected per run.  This mode was referred to as IOV in SASSIFI.  As of now (4/1/2020), NVBitFI allows us to select the following instruction groups to study how errors in them can propagate to the application output.
