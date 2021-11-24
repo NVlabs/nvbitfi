@@ -28,13 +28,13 @@ extern "C" __device__ __noinline__ void count_instrs(uint64_t pcounters, int ind
 	const unsigned int active_mask = __activemask();
 	const int leader = __ffs(active_mask) - 1;
 
-  /* compute the predicate mask */
-  const int predicate_mask = ballot(predicate);
+	// compute the predicate mask 
+	const int predicate_mask = ballot(predicate);
 
 	uint64_t *counters = (uint64_t*)pcounters;
 	if (threadIdx.x %32 == leader) { // Am I the leader thread
-  	/* count all the active thread */
-  	const int num_threads = __popc(predicate_mask);
+		/* count all the active thread that are not predicated out */
+		const int num_threads = __popc(predicate_mask);
 		atomicAdd((unsigned long long *)&counters[index], num_threads);
 		atomicAdd((unsigned long long *)&counters[NUM_ISA_INSTRUCTIONS+grp_index], num_threads);
 		atomicAdd((unsigned long long *)&counters[num_counters-2], num_threads*(grp_index != G_NODEST));
