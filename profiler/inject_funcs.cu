@@ -22,19 +22,20 @@
 
 // Global counters are incremented once per warp 
 extern "C" __device__ __noinline__ void count_instrs(uint64_t pcounters, int index, int grp_index, int predicate, int num_counters) {    
+	uint64_t *counters = (uint64_t*)pcounters;
+
 	// Optimization: Instead of all the threads in a warp performing atomicAdd,
 	// let's count the number of active threads with predicate=1 in a warp and let just one thread
 	// (leader) in the warp perform the atomicAdd
-	const unsigned int active_mask = __activemask();
+	const int active_mask = ballot(1);
 	const int leader = __ffs(active_mask) - 1;
+	const int laneid = get_laneid();
 
 	// compute the predicate mask 
 	const int predicate_mask = ballot(predicate);
+	const int num_threads = __popc(predicate_mask);
 
-	uint64_t *counters = (uint64_t*)pcounters;
-	if (threadIdx.x %32 == leader) { // Am I the leader thread
-		/* count all the active thread that are not predicated out */
-		const int num_threads = __popc(predicate_mask);
+	if (laneid == leader) { // Am I the leader thread
 		atomicAdd((unsigned long long *)&counters[index], num_threads);
 		atomicAdd((unsigned long long *)&counters[NUM_ISA_INSTRUCTIONS+grp_index], num_threads);
 		atomicAdd((unsigned long long *)&counters[num_counters-2], num_threads*(grp_index != G_NODEST));
