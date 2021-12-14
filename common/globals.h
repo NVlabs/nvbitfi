@@ -216,28 +216,13 @@ std::string extractInstType(std::string opcode) {
 // input: NOP
 // return 0
 int extractSize(std::string opcode) {
-	if (opcode.find("HMMA.444.F16.F16") != std::string::npos)
+	if (opcode.find("HMMA") != std::string::npos)
 		return 64;
-	if (opcode.find("HMMA.444.F32.F32") != std::string::npos)
-		return 128;
-	if (opcode.find("HMMA.848.F16.F16") != std::string::npos)
-		return 64;
-	if (opcode.find("HMMA.848.F32.F16") != std::string::npos)
-		return 128;
-	if (opcode.find("HMMA.848.F32.F32") != std::string::npos)
-		return 128;
-	if (opcode.find("HMMA.884.F16.F16") != std::string::npos)
-		return 128;
-	if (opcode.find("HMMA.884.F32.F16") != std::string::npos)
-		return 256;
-	if (opcode.find("HMMA.884.F32.F32") != std::string::npos)
-		return 256;
 
 	if (opcode.find("IMMA.8816.S8.") != std::string::npos)
 		return 64;
 	if (opcode.find("IMMA.8816.U8.") != std::string::npos) 
 		return 64;
-
 
 	// For LD, LDC, LDG instructions
 	if (opcode.find("LD") == 0) {
