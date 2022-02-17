@@ -26,14 +26,15 @@ New bit-flip models can be added by modifying common/arch.h and injector/inject\
 
 
 # Prerequisites
- * [NVBit v1.3](https://github.com/NVlabs/NVBit/releases/tag/1.3) or newer
+ * [NVBit v1.5.5](https://github.com/NVlabs/NVBit/releases/tag/1.5.5) or newer
  * [System requirements](https://github.com/NVlabs/NVbit#requirements)
 
 # Getting started on a Linux x86\_64 PC
+The following commands are tested on an x86 system with Ubuntu 18.04 using CUDA-11.2 and NVBit version 1.5.5.
 ```console
-# NVBit-v1.3
-wget https://github.com/NVlabs/NVBit/releases/download/1.3/nvbit-Linux-x86_64-1.3.tar.bz2
-tar xvfj nvbit-Linux-x86_64-1.3.tar.bz2
+# NVBit-v1.5.5
+wget https://github.com/NVlabs/NVBit/releases/download/1.5.5/nvbit-Linux-x86_64-1.5.5.tar.bz2
+tar xvfj nvbit-Linux-x86_64-1.5.5.tar.bz2
 cd nvbit_release/tools/
 
 # NVBitFI 
@@ -44,9 +45,9 @@ find . -name "*.sh" | xargs chmod +x
 ```
 On an ARM-based device (e.g., Jetson Nano)
 ```console
-# NVBit-1.5.3
-wget https://github.com/NVlabs/NVBit/releases/download/1.5.3/nvbit-Linux-aarch64-1.5.3.tar.bz2
-tar xvfj nvbit-Linux-aarch64-1.5.3.tar.bz2
+# NVBit-1.5.5
+wget https://github.com/NVlabs/NVBit/releases/download/1.5.5/nvbit-Linux-aarch64-1.5.5.tar.bz2
+tar xvfj nvbit-Linux-aarch64-1.5.5.tar.bz2
 cd nvbit_release/tools/
 
 # NVBitFI 
