@@ -128,7 +128,7 @@ void instrument_function_if_needed(CUcontext ctx, CUfunction func) {
 			nvbit_add_call_arg_const_val64(i, (uint64_t)counters);
 			nvbit_add_call_arg_const_val32(i, instTypeNameMap[instType]);
 			nvbit_add_call_arg_const_val32(i, getOpGroupNum(instTypeNameMap[instType]));
-			nvbit_add_call_arg_pred_val(i); //pass predicate value 
+			nvbit_add_call_arg_guard_pred_val(i); //pass predicate value 
 			nvbit_add_call_arg_const_val32(i, NUM_COUNTERS);
 			if (verbose==2) { 
 				printf("end..\n");

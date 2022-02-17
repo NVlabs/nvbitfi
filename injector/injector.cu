@@ -298,7 +298,7 @@ void instrument_function_if_needed(CUcontext ctx, CUfunction func) {
 				nvbit_add_call_arg_const_val32(i, instTypeNameMap[instType]); // opcode info
 				nvbit_add_call_arg_const_val32(i, instGrpNum); // instruction group info
 
-				nvbit_add_call_arg_pred_val(i); // predicate value
+				nvbit_add_call_arg_guard_pred_val(i); // predicate value
 
 				nvbit_add_call_arg_const_val32(i, destGPRNum); // destination GPR register number
 				if (destGPRNum != -1) {

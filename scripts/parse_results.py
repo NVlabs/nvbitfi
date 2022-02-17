@@ -107,7 +107,7 @@ def print_inst_fractions_tsv():
 	f = open(fname_prefix + "instruction-fractions.tsv", "w")
 	f.write("\t".join(["App", "Total"] + cf.get_inst_count_format().split(':')[2:]) + "\n")
 	for app in inst_fraction: 
-		f.write("\t".join([app] + map(str, inst_fraction[app])) + "\n")
+		f.write("\t".join([app] + list(map(str, inst_fraction[app]))) + "\n")
 	f.close()
 
 
@@ -233,10 +233,10 @@ def print_detailed_results_tsv(typ):
 				written = False
 				if igid in results_app_table[app]:
 					if bfm in results_app_table[app][igid]:
-						f.write("\t".join([p.EM_STR[bfm]] + map(str,to_list(results_app_table[app][igid][bfm], p.NUM_CATS))) + "\n")
+						f.write("\t".join([p.EM_STR[bfm]] + list(map(str,to_list(results_app_table[app][igid][bfm], p.NUM_CATS)))) + "\n")
 						written = True
 				if not written:
-					f.write("\t".join([p.EM_STR[bfm]] + map(str,to_list({}, p.NUM_CATS))))
+					f.write("\t".join([p.EM_STR[bfm]] + list(map(str,to_list({}, p.NUM_CATS)))))
 	f.close()
 
 ###############################################################################
