@@ -211,7 +211,13 @@ enum InstructionType {
 // List of instruction groups
 enum GroupType { 
 	G_FP64 = 0, // FP64 arithmetic instructions
-	G_FP32, // FP32 arithmetic instructions 
+	G_FP32, // FP32 arithmetic instructions
+    /**
+    * Fernando Fernandes, 10/2022
+    * Add the FP16 from FP16 MMA fault sites separated from FP32
+    */
+    G_FP16,
+    G_MMA,
 	G_LD, // instructions that read from emory 
 	G_PR, // instructions that write to PR registers only
 	G_NODEST, // instructions with no destination register 

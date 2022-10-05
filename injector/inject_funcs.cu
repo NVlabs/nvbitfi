@@ -75,6 +75,12 @@ extern "C" __device__ __noinline__ void inject_error(uint64_t piinfo, uint64_t p
   
 	bool injectFlag = false;
  	switch (igid) {
+        /**
+        * Fernando Fernandes, 10/2022
+        * Enable the FP16 and the MMA injections
+        */
+        case G_FP16: // It is supposed to work for FP16 and FP16MMA, as they have destination registers
+        case G_MMA:
  		case G_FP32: // inject into one of the dest reg 
  		case G_FP64: // inject into one of the regs written by the inst
  		case G_LD: // inject into one of the regs written by the inst

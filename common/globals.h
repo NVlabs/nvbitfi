@@ -110,8 +110,12 @@ const char * instTypeNames[NUM_ISA_INSTRUCTIONS] = {
  "GETLMEMBASE", "SETCRSPTR", "SETLMEMBASE" , "PMTRIG", "SETCTAID"
  };
 
+/**
+* Fernando Fernandes, 10/2022
+* Add the FP16 and MMA fault sites separated from FP32
+*/
 const char * instGrouptNames[NUM_INST_GROUPS] = {
-	"fp64", "fp32", "ld", "pr", "nodest", "others", "gppr", "gp"
+	"fp64", "fp32", "fp16", "mma", "ld", "pr", "nodest", "others", "gppr", "gp"
 	};
 
 int fp64Inst[] = {
@@ -121,6 +125,18 @@ int fp64Inst[] = {
 int fp32Inst[] = {
  FADD, FADD32I, FCMP, FFMA, FFMA32I, FMNMX, FMUL, FMUL32I, FSEL, FSET, FSWZADD, IPA, DSET
  };
+
+/**
+* Fernando Fernandes, 09/2022
+* Add the FP16 and MMA fault sites separated from FP32
+*/
+int fp16Inst[] = {
+        HADD2, HADD2_32I, HFMA2, HFMA2_32I, HMUL2, HMUL2_32I, HSET2, HSETP2,
+};
+
+int MMAInst[] = {
+        IMMA, HMMA,
+};
 
 int ldInst[] = {
  LD, LDC, LDG, LDL, LDS, SULD, SUST, TLD, TLD4, TLD4S, TLDS
@@ -142,11 +158,15 @@ int noDestInst[] = {
 
 int otherInst[] = {
  // Floating-point Instructions
- MUFU, RRO, HADD2, HADD2_32I, HFMA2, HFMA2_32I, HMUL2, HMUL2_32I, HSET2, HSETP2,
+/**
+* Fernando Fernandes, 09/2022
+* Add the FP16 and MMA fault sites separated from FP32
+*/
+ MUFU, RRO, // HADD2, HADD2_32I, HFMA2, HFMA2_32I, HMUL2, HMUL2_32I, HSET2, HSETP2,
  // Integer Instructions
  IDP, IDP4A, BFE, BFI, BMSK, BREV, FLO, IADD, IADD3, IADD32I, ICMP, IMAD, IMAD32I, IMADSP, IMNMX, IMUL, IMUL32I, ISCADD, ISCADD32I, ISET, LEA, LOP, LOP3, LOP32I, POPC, SHF, SHL, SHR, XMAD,
  // MMA instructions
- IMMA, HMMA,
+// IMMA, HMMA,
  // Video Instructions
  VABSDIFF, VADD, VMAD, VMNMX, VSET, VSHL, VSHR, VABSDIFF4,
  // Conversion Instructions
@@ -249,6 +269,14 @@ int getOpGroupNum(int opcode) {
 		return G_FP64;
 	if (checkOpType(opcode, fp32Inst, sizeof(fp32Inst)/sizeof(int))) 
 		return G_FP32;
+    /**
+    * Fernando Fernandes, 09/2022
+    * Add the FP16 and MMA fault sites separated from FP32
+    */
+    if (checkOpType(opcode, fp16Inst, sizeof(fp16Inst) / sizeof(int)))
+        return G_FP16;
+    if (checkOpType(opcode, MMAInst, sizeof(MMAInst) / sizeof(int)))
+        return G_MMA;
 	if (checkOpType(opcode, ldInst, sizeof(ldInst)/sizeof(int))) 
 		return G_LD;
 	if (checkOpType(opcode, prOnlyInst, sizeof(prOnlyInst)/sizeof(int))) 

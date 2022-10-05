@@ -18,7 +18,7 @@ NVCC_PATH=-L $(subst bin/nvcc,lib64,$(shell which nvcc | tr -s /))
 
 SOURCES=$(wildcard *.cu)
 OBJECTS=$(SOURCES:.cu=.o)
-ARCH=35
+ARCH=70
 
 # Profiling is often slow. Using an approximate profile can speed it up by
 # orders of magnitude.  Set FAST_APPROXIMATE_PROFILE to SKIP_PROFILED_KERNELS
