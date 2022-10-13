@@ -235,7 +235,13 @@ enum BitFlipModel {
 	FLIP_TWO_BITS, // flip two adjacent bits
 	RANDOM_VALUE,  // write a random value.
 	ZERO_VALUE, // write value 0
-	NUM_BFM_TYPES 
+    /**
+    * Fernando Fernandes, 10/2022
+    * Add warp wide fault models
+    */
+    WARP_RANDOM_VALUE,    // random in a warp
+    WARP_ZERO_VALUE,    // zero in all the warp
+	NUM_BFM_TYPES
 };
 
 

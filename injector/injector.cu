@@ -46,9 +46,15 @@ std::string injInputFilename = "nvbitfi-injection-info.txt";
 
 pthread_mutex_t mutex;
 
-__managed__ inj_info_t inj_info; 
+/**
+* Fernando Fernandes, 10/2022
+* Add warp wide fault models
+*/
+#define WARP_SIZE 32
+__managed__ inj_info_t inj_info_warp[WARP_SIZE];
 
 void reset_inj_info() {
+    inj_info_t inj_info;
 	inj_info.areParamsReady = false;
 	inj_info.kernelName[0] = '\0';
 	inj_info.kernelCount = -1;
@@ -68,9 +74,10 @@ void reset_inj_info() {
 	for (int i=0; i<NUM_DEBUG_VALS; i++) {
 		inj_info.debug[i] = -1;
 	}
+    std::fill(inj_info_warp, inj_info_warp + WARP_SIZE, inj_info); //Reset all elements in the array
 }
 
-void write_inj_info() {
+void write_inj_info(inj_info_t& inj_info) {
 	assert(fout.good());
 	for (int i=0; i<NUM_INST_GROUPS; i++) {
 		fout << " grp " << i << ": " << counters[NUM_ISA_INSTRUCTIONS+i];
@@ -86,7 +93,7 @@ void write_inj_info() {
 }
 
 // for debugging 
-void print_inj_info() {
+void print_inj_info(inj_info_t& inj_info) {
 	assert(fout.good());
 	fout << "kernelName=" << inj_info.kernelName << std::endl;
 	fout << "kernelCount=" << inj_info.kernelCount << std::endl;
@@ -102,8 +109,9 @@ void parse_params(std::string filename) {
 	static bool parse_flag = false; // file will be parsed only once - performance enhancement
 	if (!parse_flag) {
 		parse_flag = true;
-		reset_inj_info(); 
-
+		reset_inj_info();
+        // Fernando Fernandes, 10/2022: Always fill the entire array with the same values
+        inj_info_t inj_info = inj_info_warp[0];
 		std::ifstream ifs (filename.c_str(), std::ifstream::in);
 		if (ifs.is_open()) {
 			ifs >> inj_info.groupID; // arch state id 
@@ -128,9 +136,9 @@ void parse_params(std::string filename) {
 			assert(false);
 		}
 		ifs.close();
-
+        std::fill(inj_info_warp, inj_info_warp + WARP_SIZE, inj_info);
 		if (verbose) 
-			print_inj_info();
+			print_inj_info(inj_info);
 	}
 }
 
@@ -145,7 +153,11 @@ void INThandler(int sig) {
 	signal(sig, SIG_IGN); // disable Ctrl-C
 
 	fout << "ERROR FAIL Detected Signal SIGKILL\n";
-	write_inj_info();
+    for(auto& inj_info: inj_info_warp) {// When warp injection model is selected print all info
+        write_inj_info(inj_info);
+        if (inj_info.bitFlipModel != WARP_ZERO_VALUE && inj_info.bitFlipModel != WARP_RANDOM_VALUE)
+            break;
+    }
 	exit(-1);
 }
 
@@ -204,7 +216,8 @@ void instrument_function_if_needed(CUcontext ctx, CUfunction func) {
 		}
 
 		std::string kname = removeSpaces(nvbit_get_func_name(ctx,f));
-		if(strcmp(inj_info.kernelName, kname.c_str()) == 0) { // this is the kernel selected for injection 
+        // For instrumentation, it is possible to use only the first inj_info
+		if(strcmp(inj_info_warp[0].kernelName, kname.c_str()) == 0) { // this is the kernel selected for injection
 			assert(fout.good()); // ensure that the log file is good.
 
 			/* Get the vector of instruction composing the loaded CUFunction "f" */
@@ -290,7 +303,7 @@ void instrument_function_if_needed(CUcontext ctx, CUfunction func) {
 				}
 
 				nvbit_insert_call(i, "inject_error", IPOINT_AFTER);
-				nvbit_add_call_arg_const_val64(i, (uint64_t)&inj_info);
+				nvbit_add_call_arg_const_val64(i, (uint64_t)&inj_info_warp[0]);
 				nvbit_add_call_arg_const_val64(i, (uint64_t)counters);
 				nvbit_add_call_arg_const_val64(i, (uint64_t)&verbose_device);
 
@@ -308,7 +321,7 @@ void instrument_function_if_needed(CUcontext ctx, CUfunction func) {
 				}
 				nvbit_add_call_arg_const_val32(i, numDestGPRs); // number of destination GPR registers
 
-				if (isGPInst(instGrpNum) && inj_info.groupID == G_GP) { // PR register numbers should be -1, if the injection model is G_GP. This way we will never inject errors into them
+				if (isGPInst(instGrpNum) && inj_info_warp[0].groupID == G_GP) { // PR register numbers should be -1, if the injection model is G_GP. This way we will never inject errors into them
 					nvbit_add_call_arg_const_val32(i, (unsigned int)-1); // first destination PR register number 
 					nvbit_add_call_arg_const_val32(i, (unsigned int)-1); // second destination PR register number 
 				} else {
@@ -321,7 +334,7 @@ void instrument_function_if_needed(CUcontext ctx, CUfunction func) {
 		} else {
 			const std::vector<Instr *> &instrs = nvbit_get_instrs(ctx, f);
 			if (verbose)
-				printf(":::NVBit-inject-error; NOT inspecting: %s; %d, %d, num_static_instrs: %ld; maxregs: %d:::", kname.c_str(), kernel_id, inj_info.kernelCount, instrs.size(), get_maxregs(f));
+				printf(":::NVBit-inject-error; NOT inspecting: %s; %d, %d, num_static_instrs: %ld; maxregs: %d:::", kname.c_str(), kernel_id, inj_info_warp[0].kernelCount, instrs.size(), get_maxregs(f));
 		}
 	}
 }
@@ -353,13 +366,17 @@ void nvbit_at_cuda_event(CUcontext ctx, int is_exit, nvbit_api_cuda_t cbid,
 			parse_params(injInputFilename);  // injParams are updated based on injection seed file
 
 			// print_inj_info();
-			inj_info.errorInjected = false;
-			inj_info.areParamsReady = (inj_info.kernelCount== kernel_id); // areParamsReady = true for the selected kernel 
-			if (verbose) inj_info.debug[NUM_DEBUG_VALS-1] = -1; // set debug flag to check whether the the instrumented kernel was executed 
-			if (verbose) printf("setting areParamsReady=%d, inj_info.kernelCount=%d, kernel_id=%d\n", inj_info.areParamsReady, inj_info.kernelCount, kernel_id); 
+            // Set all the array of inj_info with the same info
+            for(auto lane_id = 0; lane_id < WARP_SIZE; lane_id++) {
+                auto& inj_info = inj_info_warp[lane_id];
+                inj_info.errorInjected = false;
+                inj_info.areParamsReady = (inj_info.kernelCount== kernel_id); // areParamsReady = true for the selected kernel
+                if (verbose) inj_info.debug[NUM_DEBUG_VALS-1] = -1; // set debug flag to check whether the the instrumented kernel was executed
+                if (verbose) printf("setting areParamsReady=%d, inj_info.kernelCount=%d, kernel_id=%d, laneId=%d\n", inj_info.areParamsReady, inj_info.kernelCount, kernel_id, lane_id);
+            }
 			cudaDeviceSynchronize();
 
-			nvbit_enable_instrumented(ctx, p->f, inj_info.areParamsReady); // should we run the un-instrumented code? 
+			nvbit_enable_instrumented(ctx, p->f, inj_info_warp[0].areParamsReady); // should we run the un-instrumented code?
 			// nvbit_enable_instrumented(ctx, p->f, false); // for debugging
 			cudaDeviceSynchronize();
 		}  else {
@@ -376,48 +393,57 @@ void nvbit_at_cuda_event(CUcontext ctx, int is_exit, nvbit_api_cuda_t cbid,
 			}
 
 			std::string kname = removeSpaces(nvbit_get_func_name(ctx,p->f));
-			if (inj_info.areParamsReady) {
-				inj_info.areParamsReady = false;
-				int num_ctas = 0;
-				if ( cbid == API_CUDA_cuLaunchKernel_ptsz || cbid == API_CUDA_cuLaunchKernel) {
-					cuLaunchKernel_params * p2 = (cuLaunchKernel_params*) params;
-					num_ctas = p2->gridDimX * p2->gridDimY * p2->gridDimZ;
-				}
-				assert(fout.good());
-				fout << "Injection data" << std::endl;
-				fout << "index: " << kernel_id << std::endl;
-				fout << "kernel_name: " << kname  << std::endl;
-				fout << "ctas: " << num_ctas << std::endl;
-				fout << "instrs: " << get_inst_count() << std::endl; 
+            /**
+            * Fernando Fernandes, 10/2022
+            * if a warp fault model is selected verify all the elements in the inj_info_warp array
+            */
+            for(auto lane_id = 0; lane_id < WARP_SIZE; lane_id++) {
+                auto& inj_info = inj_info_warp[lane_id];
+                if (inj_info.areParamsReady) {
+                    inj_info.areParamsReady = false;
+                    int num_ctas = 0;
+                    if ( cbid == API_CUDA_cuLaunchKernel_ptsz || cbid == API_CUDA_cuLaunchKernel) {
+                        cuLaunchKernel_params * p2 = (cuLaunchKernel_params*) params;
+                        num_ctas = p2->gridDimX * p2->gridDimY * p2->gridDimZ;
+                    }
+                    assert(fout.good());
+                    fout << "Injection data, laneId:" << lane_id << std::endl;
+                    fout << "index: " << kernel_id << std::endl;
+                    fout << "kernel_name: " << kname  << std::endl;
+                    fout << "ctas: " << num_ctas << std::endl;
+                    fout << "instrs: " << get_inst_count() << std::endl;
 
-				write_inj_info(); 
+                    write_inj_info(inj_info);
 
-				if (inj_info.opcode == NOP) {
-					fout << "Error not injected\n";
-				}
+                    if (inj_info.opcode == NOP) {
+                        fout << "Error not injected\n";
+                    }
 
-				if (verbose != 0 && inj_info.debug[2] != inj_info.debug[3]) { // sanity check
-					fout << "ERROR FAIL in kernel execution; Expected reg value doesn't match; \n";
-					fout << "maxRegs: " << inj_info.debug[0] << ", destGPRNum: " << inj_info.debug[1] << ", expected_val: " 
-						<< std::hex << inj_info.debug[2] << ", myval: " <<  inj_info.debug[3] << std::dec << "\n"; 
-					fout << std::endl;
-					std::cout << "NVBit-inject-error; ERROR FAIL in kernel execution; Expected reg value doesn't match; \n";
-					std::cout << "maxRegs: " << inj_info.debug[0] << ", destGPRNum: " << inj_info.debug[1] << ", expected_val: " 
-						<< std::hex << inj_info.debug[2] << ", myval: " <<  inj_info.debug[3] << std::dec << "\n"; 
-					for (int x=4; x<10; x++) {
-						std::cout << "debug[" << x << "]: " << std::hex << inj_info.debug[x] << "\n";
-					}
-					std::cout << "debug[11]: " << std::hex << inj_info.debug[11] << "\n";
-					std::cout << "debug[12]: " << inj_info.debug[12] << " " << instTypeNames[inj_info.debug[12]]<< "\n";
-					std::cout << "debug[13]: " << inj_info.debug[13] << "\n"; 
-					std::cout << "debug[14]: " << std::hex <<  inj_info.debug[14] << "\n"; 
-					assert(inj_info.debug[2] == inj_info.debug[3]);
-					// printf("\nmaxRegs: %d, destGPRNum: %d, expected_val: %x, myval: %x, myval@-1: %x, myval@+1: %x, myval with maxRegs+1: %x, myval with maxRegs-1: %x\n", 
-					// inj_info.debug[0], inj_info.debug[1], inj_info.debug[2], inj_info.debug[3], inj_info.debug[4], inj_info.debug[5], inj_info.debug[6], inj_info.debug[7]);
-				}
-				fout.flush();
-			}
-			if (verbose) printf("\n index: %d; kernel_name: %s; used_instrumented=%d; \n", kernel_id, kname.c_str(), inj_info.debug[NUM_DEBUG_VALS-1]);
+                    if (verbose != 0 && inj_info.debug[2] != inj_info.debug[3]) { // sanity check
+                        fout << "ERROR FAIL in kernel execution; Expected reg value doesn't match; \n";
+                        fout << "maxRegs: " << inj_info.debug[0] << ", destGPRNum: " << inj_info.debug[1] << ", expected_val: "
+                            << std::hex << inj_info.debug[2] << ", myval: " <<  inj_info.debug[3] << std::dec << "\n";
+                        fout << std::endl;
+                        std::cout << "NVBit-inject-error; ERROR FAIL in kernel execution; Expected reg value doesn't match; \n";
+                        std::cout << "maxRegs: " << inj_info.debug[0] << ", destGPRNum: " << inj_info.debug[1] << ", expected_val: "
+                            << std::hex << inj_info.debug[2] << ", myval: " <<  inj_info.debug[3] << std::dec << "\n";
+                        for (int x=4; x<10; x++) {
+                            std::cout << "debug[" << x << "]: " << std::hex << inj_info.debug[x] << "\n";
+                        }
+                        std::cout << "debug[11]: " << std::hex << inj_info.debug[11] << "\n";
+                        std::cout << "debug[12]: " << inj_info.debug[12] << " " << instTypeNames[inj_info.debug[12]]<< "\n";
+                        std::cout << "debug[13]: " << inj_info.debug[13] << "\n";
+                        std::cout << "debug[14]: " << std::hex <<  inj_info.debug[14] << "\n";
+                        assert(inj_info.debug[2] == inj_info.debug[3]);
+                        // printf("\nmaxRegs: %d, destGPRNum: %d, expected_val: %x, myval: %x, myval@-1: %x, myval@+1: %x, myval with maxRegs+1: %x, myval with maxRegs-1: %x\n",
+                        // inj_info.debug[0], inj_info.debug[1], inj_info.debug[2], inj_info.debug[3], inj_info.debug[4], inj_info.debug[5], inj_info.debug[6], inj_info.debug[7]);
+                    }
+                    fout.flush();
+                }
+                if (verbose) printf("\n index: %d; kernel_name: %s; used_instrumented=%d; \n", kernel_id, kname.c_str(), inj_info.debug[NUM_DEBUG_VALS-1]);
+                if (inj_info.bitFlipModel != WARP_ZERO_VALUE && inj_info.bitFlipModel != WARP_RANDOM_VALUE)
+                    break;
+            }
 			kernel_id++; // always increment kernel_id on kernel exit
 
 			cudaDeviceSynchronize();
