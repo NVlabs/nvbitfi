@@ -34,19 +34,30 @@ __inline__ __device__ int get_flat_tid() {
 // Get bit-mask for error injection. Old value will be XORed with this mask later to inject the error. 
 __inline__ 
 __device__ unsigned int get_mask(uint32_t bitFlipModel, float bitIDSeed, unsigned int oldVal) {
+    /**
+    * Fernando Fernandes, 10/2022
+    * Added the mask creation for warp wide injections
+    */
 	return (bitFlipModel == FLIP_SINGLE_BIT) * ((unsigned int)1<<(int)(32*bitIDSeed)) + 
 		(bitFlipModel == FLIP_TWO_BITS) * ((unsigned int)3<<(int)(31*bitIDSeed)) + 
-		(bitFlipModel == RANDOM_VALUE)  * (((unsigned int)-1) * bitIDSeed) +
-		(bitFlipModel == ZERO_VALUE) * oldVal;
+		(bitFlipModel == RANDOM_VALUE || bitFlipModel == WARP_RANDOM_VALUE)  * (((unsigned int)-1) * bitIDSeed) +
+		(bitFlipModel == ZERO_VALUE || bitFlipModel == WARP_ZERO_VALUE) * oldVal;
 }
 
 extern "C" __device__ __noinline__ void inject_error(uint64_t piinfo, uint64_t pcounters, uint64_t pverbose_device, 
 			int offset, int index, int grp_index,  int predicate, int destGPRNum, int regval, 
 			int numDestGPRs, int destPRNum1, int destPRNum2, int maxRegs) {
 
-	inj_info_t* inj_info = (inj_info_t*)piinfo; 
+	inj_info_t* inj_info = (inj_info_t*)piinfo;
 	uint32_t verbose_device = *((uint32_t *)pverbose_device);
  	uint64_t * counters = (uint64_t *)pcounters;
+    // Fernando Fernandes, 10/2022: The inj_info is now an array of 32 position of inj_info_t
+    // each position for each lane_id. This is only valid for warp wide injections, other fault models use position 0
+    const unsigned lane_id = get_laneid();
+    const bool warp_wide_fi = inj_info->bitFlipModel == WARP_ZERO_VALUE || inj_info->bitFlipModel == WARP_RANDOM_VALUE;
+    if (warp_wide_fi) {
+        inj_info += lane_id;
+    }
 
  	if (verbose_device)
  		inj_info->debug[NUM_DEBUG_VALS-1] = 1;
@@ -75,6 +86,12 @@ extern "C" __device__ __noinline__ void inject_error(uint64_t piinfo, uint64_t p
   
 	bool injectFlag = false;
  	switch (igid) {
+        /**
+        * Fernando Fernandes, 10/2022
+        * Enable the FP16 and the MMA injections
+        */
+        case G_FP16: // It is supposed to work for FP16 and FP16MMA, as they have destination registers
+        case G_MMA:
  		case G_FP32: // inject into one of the dest reg 
  		case G_FP64: // inject into one of the regs written by the inst
  		case G_LD: // inject into one of the regs written by the inst
@@ -96,14 +113,17 @@ extern "C" __device__ __noinline__ void inject_error(uint64_t piinfo, uint64_t p
  		case G_NODEST: // do nothing
  		default:  break;
  	}
-  
+    // Fernando Fernandes, 10/2022:
+    // If the warp injections is selected, sync between all the active threads within the warp
+    if (warp_wide_fi)
+        injectFlag = __any_sync(__activemask(), injectFlag) != 0;
    	if (verbose_device && injectFlag) 
 		printf("inj_info->instID=%ld, %ld, %ld, %ld\n", inj_info->instID, currCounter1, currCounter2, currCounter3);
 
 	if (injectFlag) {
 		// assert(0 == 10);
 		if (verbose_device)
-			printf("offset=0x%x, igid:%d, destGPRNum=%d, grp_index=%d\n", offset, igid, destGPRNum, grp_index); 
+			printf("offset=0x%x, igid:%d, destGPRNum=%d, grp_index=%d laneId=%d\n", offset, igid, destGPRNum, grp_index, lane_id);  // Fernando Fernandes, 10/2022: debug message
 		// We need to randomly select one register from numDestGPRs + (destPRNum1 != -1) + (destPRNum2 != -1)
 		int totalDest = numDestGPRs + (destPRNum1 != -1) + (destPRNum2 != -1);
 		assert(totalDest > 0);
@@ -142,7 +162,7 @@ extern "C" __device__ __noinline__ void inject_error(uint64_t piinfo, uint64_t p
  				assert(inj_info->debug[12] == inj_info->opcode);
  				assert(inj_info->debug[13] == inj_info->pcOffset);
  				if (verbose_device) 
- 					printf("done here\n"); 
+ 					printf("done here, lane:%d\n", lane_id); // Fernando Fernandes, 10/2022: debug message
 			} else {
 				assert(0 == 2); 
 			}

@@ -19,6 +19,17 @@
 
 #include "utils/utils.h"
 #include "arch.h"
+/**
+* Fernando Fernandes, 10/2022
+* Add the support for ballot_sync for architectures >= 70
+*/
+__device__ inline int profiler_ballot(int pred) {
+#if __CUDA_ARCH__ >= 700
+    return  __ballot_sync(0xFFFFFFFF, pred);
+#else
+    return ballot(pred);
+#endif
+}
 
 // Global counters are incremented once per warp 
 extern "C" __device__ __noinline__ void count_instrs(uint64_t pcounters, int index, int grp_index, int predicate, int num_counters) {    
@@ -27,12 +38,12 @@ extern "C" __device__ __noinline__ void count_instrs(uint64_t pcounters, int ind
 	// Optimization: Instead of all the threads in a warp performing atomicAdd,
 	// let's count the number of active threads with predicate=1 in a warp and let just one thread
 	// (leader) in the warp perform the atomicAdd
-	const int active_mask = ballot(1);
+    const int active_mask = profiler_ballot(1);
 	const int leader = __ffs(active_mask) - 1;
 	const int laneid = get_laneid();
 
 	// compute the predicate mask 
-	const int predicate_mask = ballot(predicate);
+    const int predicate_mask = profiler_ballot(1); //ballot(predicate);
 	const int num_threads = __popc(predicate_mask);
 
 	if (laneid == leader) { // Am I the leader thread
