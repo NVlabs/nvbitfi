@@ -1,3 +1,84 @@
+# NVBitFI_for_ODC
+
+Fork of [NVBitFI](https://github.com/NVlabs/nvbitfi) used in an MSc thesis on radiation effects in GPUs for orbital data centers. The fault injection results are combined with proton-beam data to map which GPU subsystems need protection.
+
+Main changes with respect to NVBitFI (tested with NVBit 1.5.5, Volta/Turing):
+
+* **NVBit 1.8, CUDA 12, Blackwell (sm_120).** Shared build settings in `common/build.mk` (`NVBIT_PATH`, `ARCH`, `DUMMY`). All kernel launch APIs are intercepted, including `cuLaunchKernelEx`, which CUDA 12 runtimes use.
+* **Opcode table for current GPUs.** `common/arch.h` holds one table (opcode → group) generated with an X-macro. It covers the Blackwell instruction set (CUDA Binary Utilities 12.9) and every opcode in the sm_120 SASS of cuBLAS/cuBLASLt 12.9, which has zero unknown opcodes. The original table missed 49 opcodes used on sm_120 (e.g. `LDCU`, `UIADD3`, `R2UR`, `QMMA`, `DMMA`, `LDGSTS`, `LDSM`, `F2FP`) and counted them as `FADD`. Opcodes still missing go to `G_UNKNOWN`: they are reported at run time and never injected.
+* **Destination registers from NVBit's decoded operands** (`common/dests.h`) instead of string parsing. It separates GPRs, predicate registers, uniform registers and uniform predicates. It ignores discard targets (`RZ`, `URZ`, `PT`, `UPT`). It computes the right width of 64/128-bit, `IMAD.WIDE` and tensor-core results. Tested offline on 11 M sm_120 instructions (`tests/dests_test.cpp`).
+* **Injection into every register class** with the NVBit 1.8 device API: GPRs, **predicate registers**, **uniform registers** and **uniform predicates**.
+* **New instruction groups**: `tc` (tensor cores), `sfu` (MUFU), `fp16` (packed FP16/BF16/FP8), `uniform` (uniform datapath), `unknown`.
+* **Two-phase injection.** The target is selected BEFORE the instruction, with the same rules and the same instrumentation point as the profiler. It is corrupted AFTER the instruction.
+* **Hardware location in the log**: SM id, hardware warp slot, lane, CTA, register class and number.
+* **One JSON record per injection** (`results-*.jsonl`), ready for the ML pipeline.
+* **Bug fixes**: `SUST` was in two groups, `HSETP2` was in the wrong group (assert crash with `G_GP`), off-by-one in injection-site sampling, `__ballot` illegal on sm_70+, pf_injector deadlock past `INSTRUMENTATION_LIMIT` and injection into predicated-out instructions, Python 3 issues (`map` is lazy so SDC outputs were never saved, `dmesg` bytes/empty output, timeout check).
+
+## Requirements
+
+| | |
+|---|---|
+| OS | Linux x86_64 (NVBit does not run on Windows; WSL is not supported) |
+| NVBit | 1.8 (`nvbit-Linux-x86_64-1.8.tar.bz2` from the NVBit releases) |
+| CUDA toolkit | 12.0 or newer; 12.8 or newer for sm_120 |
+| NVIDIA driver | **575.xx or older** (NVBit 1.8 requirement) |
+| GCC | 8.5 or newer |
+
+## Build
+
+```console
+wget https://github.com/NVlabs/NVBit/releases/download/v1.8/nvbit-Linux-x86_64-1.8.tar.bz2
+tar xvfj nvbit-Linux-x86_64-1.8.tar.bz2
+cd nvbit_release_x86_64/tools/
+git clone https://github.com/tommasolanzini/NVBitFI_for_ODC nvbitfi
+cd nvbitfi
+make -C injector ARCH=sm_120     # ARCH=all (default) builds for every supported GPU
+make -C profiler ARCH=sm_120
+make -C pf_injector ARCH=sm_120
+```
+
+If the repository is somewhere else, pass `NVBIT_PATH=/path/to/nvbit_release_x86_64/core`.
+
+## Instruction groups
+
+Each opcode belongs to one exclusive group, given by the unit that produces its result. `gppr` and `gp` are aggregates defined by the destination operands.
+
+| id | group | what | injectable destinations |
+|---|---|---|---|
+| 0 | fp64 | DADD, DFMA, DMUL, ... | all destinations (GPR + PR) |
+| 1 | fp32 | FADD, FFMA, FMUL, FMNMX, ... | all destinations |
+| 2 | ld | LDG, LDS, LDSM, LDC, LDL, ... | all destinations |
+| 3 | pr | ISETP, FSETP, DSETP, PLOP3, R2P, ... | predicate registers |
+| 4 | nodest | stores, branches, barriers, LDGSTS, REDG, ... | none |
+| 5 | others | integer, conversion, move, shuffle, atomics, ... | all destinations |
+| 6 | tc | HMMA, IMMA, DMMA, QMMA, OMMA | all destinations |
+| 7 | sfu | MUFU | all destinations |
+| 8 | fp16 | HADD2, HFMA2, HMUL2, QFMA4, ... | all destinations |
+| 9 | uniform | UIADD3, ULEA, LDCU, S2UR, R2UR, VOTEU, ... | uniform registers + uniform predicates |
+| 10 | unknown | opcodes missing from `arch.h` | none |
+| 11 | gppr | any non-uniform instruction writing a GPR or PR | GPRs + predicate registers |
+| 12 | gp | any non-uniform instruction writing a GPR | GPRs (original NVBitFI default) |
+
+Profile counts per group are the **injectable** dynamic instances, i.e. those with at least one destination of the right class and the guard predicate true. Uniform-datapath instructions execute once per warp and are counted once per warp. For 1-bit destinations (predicates), `FLIP_SINGLE_BIT` and `FLIP_TWO_BITS` invert the predicate, `RANDOM_VALUE` writes a random 0/1 and `ZERO_VALUE` writes 0.
+
+## Injection log and results
+
+`nvbitfi-injection-log-temp.txt` now also contains `regType` (GPR/PR/UR/UP), `smID`, `warpID` (hardware warp slot), `laneID`, `ctaID` and `groupInstrs`. `groupInstrs` is the number of injectable instances of the group in the kernel; it must match the profile.
+
+Next to every `results-*.txt` (same format as NVBitFI), `run_one_injection.py` writes `results-*.jsonl` with one JSON object per injection: app, group, model, kernel, PC, opcode, thread, CTA, SM, warp slot, lane, register class and number, mask, before/after value, outcome category, runtime and dmesg.
+
+## First run on a new GPU (checklist)
+
+1. `make -C tests` and `./tests/dests_test --check`, the offline destination analysis (no GPU needed).
+2. Profile with `TOOL_VERBOSE=1`. Every static instruction is printed with its group and destinations. Check that there are no `opcode ... is not in common/arch.h` warnings.
+3. Build the injector with `DUMMY=1` and run a short campaign. Every outcome must be *Masked* and `groupInstrs` must match the profile.
+4. Run a few injections per group with `TOOL_VERBOSE=1`. The log must show `regType`/`regNo`, and no `Expected reg value doesn't match` (sanity check of the NVBit register-read path).
+5. Uniform registers and predicates are written by a single lane, the warp leader. Check with a few `G_UNIFORM` and `G_PR` injections that the corrupted value is visible to the whole warp (UR/UP) or to the thread (PR).
+
+---
+
+# Original NVBitFI README
+
 # NVBitFI: An Architecture-level Fault Injection Tool for GPU Application Resilience Evaluations
 
 NVBitFI provides an automated framework to perform error injection campaigns for GPU application resilience evaluation.  NVBitFI builds on top of [**NV**IDIA **Bi**nary **I**nstrumentation **T**ool (NVBit)](https://github.com/NVlabs/NVbit), which is a research prototype of a dynamic binary instrumentation library for NVIDIA GPUs. NVBitFI offers functionality that is similar to a prior tool called [SASSIFI](https://github.com/NVlabs/sassifi).  
