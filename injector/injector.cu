@@ -204,82 +204,80 @@ void instrument_function_if_needed(CUcontext ctx, CUfunction func) {
 	verbose_device = verbose;
 	cudaDeviceSynchronize();
 
-	/* Get related functions of the kernel (device function that can be
-	 * called by the kernel) */
-	std::vector<CUfunction> related_functions =
-		nvbit_get_related_functions(ctx, func);
+	/* Only the kernel selected for injection is instrumented, together with
+	 * all its related (device) functions: the profiler counts the
+	 * instructions of non-inlined device functions (CALL) as part of the
+	 * kernel, so the injector must count them too. (The original matched the
+	 * name of every related function against the kernel name, so device
+	 * functions were never instrumented and the counts could disagree.) */
+	std::string launched = removeSpaces(nvbit_get_func_name(ctx, func));
+	if (strcmp(inj_info.kernelName, launched.c_str()) != 0) {
+		if (verbose)
+			printf(":::NVBit-inject-error; NOT inspecting: %s; %d, %d:::", launched.c_str(), kernel_id, inj_info.kernelCount);
+		return;
+	}
 
-	/* add kernel itself to the related function vector */
-	related_functions.push_back(func);
+	std::vector<CUfunction> related_functions = nvbit_get_related_functions(ctx, func);
+	related_functions.push_back(func); /* add kernel itself to the related function vector */
 
-	/* iterate on function */
 	for (auto f : related_functions) {
-		/* "recording" function was instrumented, if set insertion failed
-		 * we have already encountered this function */
+		/* skip functions that were already instrumented */
 		if (!already_instrumented.insert(f).second) {
 			continue;
 		}
 
 		std::string kname = removeSpaces(nvbit_get_func_name(ctx,f));
-		if(strcmp(inj_info.kernelName, kname.c_str()) == 0) { // this is the kernel selected for injection
-			assert(fout.good()); // ensure that the log file is good.
+		assert(fout.good()); // ensure that the log file is good.
 
-			/* Get the vector of instruction composing the loaded CUFunction "f" */
-			const std::vector<Instr *> &instrs = nvbit_get_instrs(ctx, f);
-
-			/* If verbose we print function name and number of" static" instructions */
-			if (verbose) {
-				printf("inspecting %s - num instrs %ld\n", nvbit_get_func_name(ctx, f), instrs.size());
-			}
-
-			func_config_t config;
-			nvbit_get_func_config(ctx, f, &config);
-			fout << "inspecting: " << kname << "\nnum_static_instrs: " << instrs.size() << "\nmaxregs: " << config.num_registers << std::endl;
-
-			int num_instrumented = 0;
-			/* We iterate on the vector of instruction */
-			for (auto i : instrs) {
-				StaticInstInfo si = analyze_instr(i);
-				if (si.opcode == UNKNOWN_OPCODE) warn_unknown_opcode(i);
-				if (!relevant_for_group(si, inj_info.groupID)) continue;
-				num_instrumented++;
-
-				if (verbose) {
-					printf("0x%04x %-10s grp=%-8s dests=%-16s flags=0x%x  %s\n", i->getOffset(),
-							instTypeNames[si.opcode], instGrouptNames[si.group], si.dests.str().c_str(), si.flags, i->getSass());
-				}
-
-				/* BEFORE: count injectable instances and select the target */
-				nvbit_insert_call(i, "inject_select", IPOINT_BEFORE);
-				nvbit_add_call_arg_const_val64(i, (uint64_t)&inj_info);
-				nvbit_add_call_arg_const_val64(i, (uint64_t)counters);
-				nvbit_add_call_arg_const_val32(i, i->getOffset()); // offset (for pc) info
-				nvbit_add_call_arg_const_val32(i, si.opcode); // opcode info
-				nvbit_add_call_arg_const_val32(i, si.group); // instruction group info
-				nvbit_add_call_arg_const_val32(i, si.flags); // eligibility flags
-				nvbit_add_call_arg_guard_pred_val(i); // predicate value
-
-				/* AFTER: corrupt one destination of the selected instance */
-				nvbit_insert_call(i, "inject_error", IPOINT_AFTER);
-				nvbit_add_call_arg_const_val64(i, (uint64_t)&inj_info);
-				nvbit_add_call_arg_const_val64(i, (uint64_t)&verbose_device);
-				nvbit_add_call_arg_const_val32(i, i->getOffset());
-				nvbit_add_call_arg_const_val32(i, pack_range(si.dests.gpr_base, si.dests.num_gpr));
-				nvbit_add_call_arg_const_val32(i, si.dests.pr_mask);
-				nvbit_add_call_arg_const_val32(i, pack_range(si.dests.ur_base, si.dests.num_ur));
-				nvbit_add_call_arg_const_val32(i, si.dests.up_mask);
-				if (si.dests.num_gpr > 0) {
-					nvbit_add_call_arg_reg_val(i, si.dests.gpr_base); // first destination GPR value (sanity check)
-				} else {
-					nvbit_add_call_arg_const_val32(i, (unsigned int)-1);
-				}
-			}
-			fout << "num_instrumented_instrs: " << num_instrumented << std::endl;
-		} else {
-			const std::vector<Instr *> &instrs = nvbit_get_instrs(ctx, f);
-			if (verbose)
-				printf(":::NVBit-inject-error; NOT inspecting: %s; %d, %d, num_static_instrs: %ld:::", kname.c_str(), kernel_id, inj_info.kernelCount, instrs.size());
+		/* Get the vector of instruction composing the loaded CUFunction "f" */
+		const std::vector<Instr *> &instrs = nvbit_get_instrs(ctx, f);
+		if (verbose) {
+			printf("inspecting %s - num instrs %ld\n", nvbit_get_func_name(ctx, f), instrs.size());
 		}
+
+		func_config_t config;
+		nvbit_get_func_config(ctx, f, &config);
+		fout << "inspecting: " << kname << "\nnum_static_instrs: " << instrs.size() << "\nmaxregs: " << config.num_registers << std::endl;
+
+		int num_instrumented = 0;
+		/* We iterate on the vector of instruction */
+		for (auto i : instrs) {
+			StaticInstInfo si = analyze_instr(i);
+			if (si.opcode == UNKNOWN_OPCODE) warn_unknown_opcode(i);
+			if (!relevant_for_group(si, inj_info.groupID)) continue;
+			num_instrumented++;
+
+			if (verbose) {
+				printf("0x%04x %-10s grp=%-8s dests=%-16s flags=0x%x  %s\n", i->getOffset(),
+						instTypeNames[si.opcode], instGrouptNames[si.group], si.dests.str().c_str(), si.flags, i->getSass());
+			}
+
+			/* BEFORE: count injectable instances and select the target */
+			nvbit_insert_call(i, "inject_select", IPOINT_BEFORE);
+			nvbit_add_call_arg_const_val64(i, (uint64_t)&inj_info);
+			nvbit_add_call_arg_const_val64(i, (uint64_t)counters);
+			nvbit_add_call_arg_const_val32(i, i->getOffset()); // offset (for pc) info
+			nvbit_add_call_arg_const_val32(i, si.opcode); // opcode info
+			nvbit_add_call_arg_const_val32(i, si.group); // instruction group info
+			nvbit_add_call_arg_const_val32(i, si.flags); // eligibility flags
+			nvbit_add_call_arg_guard_pred_val(i); // predicate value
+
+			/* AFTER: corrupt one destination of the selected instance */
+			nvbit_insert_call(i, "inject_error", IPOINT_AFTER);
+			nvbit_add_call_arg_const_val64(i, (uint64_t)&inj_info);
+			nvbit_add_call_arg_const_val64(i, (uint64_t)&verbose_device);
+			nvbit_add_call_arg_const_val32(i, i->getOffset());
+			nvbit_add_call_arg_const_val32(i, pack_range(si.dests.gpr_base, si.dests.num_gpr));
+			nvbit_add_call_arg_const_val32(i, si.dests.pr_mask);
+			nvbit_add_call_arg_const_val32(i, pack_range(si.dests.ur_base, si.dests.num_ur));
+			nvbit_add_call_arg_const_val32(i, si.dests.up_mask);
+			if (si.dests.num_gpr > 0) {
+				nvbit_add_call_arg_reg_val(i, si.dests.gpr_base); // first destination GPR value (sanity check)
+			} else {
+				nvbit_add_call_arg_const_val32(i, (unsigned int)-1);
+			}
+		}
+		fout << "num_instrumented_instrs: " << num_instrumented << std::endl;
 	}
 }
 
