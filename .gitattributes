@@ -1,0 +1,10 @@
+# Force LF line endings in the repository and in every working copy.
+# Shell and Python scripts with CRLF fail on Linux ("bad interpreter").
+* text=auto eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.cu text eol=lf
+*.h  text eol=lf
+Makefile text eol=lf
+*.pdf binary
+*.png binary
