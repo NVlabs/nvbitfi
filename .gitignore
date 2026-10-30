@@ -1,0 +1,7 @@
+# build artifacts
+*.o
+*.so
+# campaign outputs
+logs/
+__pycache__/
+*.pyc

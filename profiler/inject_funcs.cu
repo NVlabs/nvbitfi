@@ -27,12 +27,12 @@ extern "C" __device__ __noinline__ void count_instrs(uint64_t pcounters, int ind
 	// Optimization: Instead of all the threads in a warp performing atomicAdd,
 	// let's count the number of active threads with predicate=1 in a warp and let just one thread
 	// (leader) in the warp perform the atomicAdd
-	const int active_mask = ballot(1);
+	const unsigned active_mask = __activemask(); // __ballot without .sync is illegal on sm_70+
 	const int leader = __ffs(active_mask) - 1;
 	const int laneid = get_laneid();
 
 	// compute the predicate mask 
-	const int predicate_mask = ballot(predicate);
+	const unsigned predicate_mask = __ballot_sync(active_mask, predicate);
 	const int num_threads = __popc(predicate_mask);
 
 	if (laneid == leader) { // Am I the leader thread

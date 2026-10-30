@@ -265,26 +265,21 @@ void instrument_function_if_needed(CUcontext ctx, CUfunction func) {
 void nvbit_at_cuda_event(CUcontext ctx, int is_exit, nvbit_api_cuda_t cbid,
 				const char *name, void *params, CUresult *pStatus) {
 		/* Identify all the possible CUDA launch events */
-		if (cbid == API_CUDA_cuLaunch ||
-						cbid == API_CUDA_cuLaunchKernel_ptsz ||
-						cbid == API_CUDA_cuLaunchGrid ||
-						cbid == API_CUDA_cuLaunchGridAsync || 
-						cbid == API_CUDA_cuLaunchKernel) {
+		if (is_kernel_launch(cbid)) {
 
-				/* cast params to cuLaunch_params since if we are here we know these are
-				 * the right parameters type */
-				cuLaunch_params * p = (cuLaunch_params *) params;
+				/* CUfunction of the launched kernel (also for cuLaunchKernelEx) */
+				CUfunction func = get_launched_function(cbid, params);
 
 				if(!is_exit) {
 						pthread_mutex_lock(&mutex);
 						if (kernel_id < limit) {
-							instrument_function_if_needed(ctx, p->f);
+							instrument_function_if_needed(ctx, func);
 							// cudaDeviceSynchronize();
 
-							nvbit_enable_instrumented(ctx, p->f, true); // run the instrumented version
+							nvbit_enable_instrumented(ctx, func, true); // run the instrumented version
 							// cudaDeviceSynchronize();
 						} else {
-							nvbit_enable_instrumented(ctx, p->f, false); // do not use the instrumented version
+							nvbit_enable_instrumented(ctx, func, false); // do not use the instrumented version
 						}
 
 				}  else {
@@ -294,13 +289,8 @@ void nvbit_at_cuda_event(CUcontext ctx, int is_exit, nvbit_api_cuda_t cbid,
 
 								cudaError_t le = cudaGetLastError();
 
-								std::string kname = removeSpaces(nvbit_get_func_name(ctx,p->f));
-								int num_ctas = 0;
-								if ( cbid == API_CUDA_cuLaunchKernel_ptsz ||
-												cbid == API_CUDA_cuLaunchKernel) {
-										cuLaunchKernel_params * p2 = (cuLaunchKernel_params*) params;
-										num_ctas = p2->gridDimX * p2->gridDimY * p2->gridDimZ;
-								}
+								std::string kname = removeSpaces(nvbit_get_func_name(ctx,func));
+								int num_ctas = get_num_ctas(cbid, params);
 								assert(fout.good());
 								fout << "Injection data; " ;
 								fout << "index: " << kernel_id << ";"; 
@@ -321,9 +311,11 @@ void nvbit_at_cuda_event(CUcontext ctx, int is_exit, nvbit_api_cuda_t cbid,
 								if (verbose) printf("\n index: %d; kernel_name: %s; \n", kernel_id, kname.c_str());
 								kernel_id++; // always increment kernel_id on kernel exit
 
-								// cudaDeviceSynchronize();
-								pthread_mutex_unlock(&mutex);
 						}
+						// Always release the lock taken at launch entry. Originally the unlock
+						// was inside "if (kernel_id < limit)", so the first launch past
+						// INSTRUMENTATION_LIMIT never released it and the next launch deadlocked.
+						pthread_mutex_unlock(&mutex);
 				}
 		}
 }

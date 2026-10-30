@@ -335,19 +335,15 @@ void instrument_function_if_needed(CUcontext ctx, CUfunction func) {
 void nvbit_at_cuda_event(CUcontext ctx, int is_exit, nvbit_api_cuda_t cbid,
 		const char *name, void *params, CUresult *pStatus) {
 	/* Identify all the possible CUDA launch events */
-	if (cbid == API_CUDA_cuLaunch ||
-			cbid == API_CUDA_cuLaunchKernel_ptsz ||
-			cbid == API_CUDA_cuLaunchGrid ||
-			cbid == API_CUDA_cuLaunchGridAsync || 
-			cbid == API_CUDA_cuLaunchKernel) {
+	if (is_kernel_launch(cbid)) {
 
-		/* cast params to cuLaunch_params since if we are here we know these are
-		 * the right parameters type */
-		cuLaunch_params * p = (cuLaunch_params *) params;
+		/* CUfunction of the launched kernel (also for cuLaunchKernelEx) */
+
+		CUfunction func = get_launched_function(cbid, params);
 
 		if(!is_exit) {
 			pthread_mutex_lock(&mutex);
-            		instrument_function_if_needed(ctx, p->f);
+            		instrument_function_if_needed(ctx, func);
 			init_counters();
 			cudaDeviceSynchronize();
 			parse_params(injInputFilename);  // injParams are updated based on injection seed file
@@ -359,8 +355,8 @@ void nvbit_at_cuda_event(CUcontext ctx, int is_exit, nvbit_api_cuda_t cbid,
 			if (verbose) printf("setting areParamsReady=%d, inj_info.kernelCount=%d, kernel_id=%d\n", inj_info.areParamsReady, inj_info.kernelCount, kernel_id); 
 			cudaDeviceSynchronize();
 
-			nvbit_enable_instrumented(ctx, p->f, inj_info.areParamsReady); // should we run the un-instrumented code? 
-			// nvbit_enable_instrumented(ctx, p->f, false); // for debugging
+			nvbit_enable_instrumented(ctx, func, inj_info.areParamsReady); // should we run the un-instrumented code? 
+			// nvbit_enable_instrumented(ctx, func, false); // for debugging
 			cudaDeviceSynchronize();
 		}  else {
 			if (verbose) printf("is_exit\n"); 
@@ -375,14 +371,10 @@ void nvbit_at_cuda_event(CUcontext ctx, int is_exit, nvbit_api_cuda_t cbid,
 				exit(1); // let's exit early because no error was injected
 			}
 
-			std::string kname = removeSpaces(nvbit_get_func_name(ctx,p->f));
+			std::string kname = removeSpaces(nvbit_get_func_name(ctx,func));
 			if (inj_info.areParamsReady) {
 				inj_info.areParamsReady = false;
-				int num_ctas = 0;
-				if ( cbid == API_CUDA_cuLaunchKernel_ptsz || cbid == API_CUDA_cuLaunchKernel) {
-					cuLaunchKernel_params * p2 = (cuLaunchKernel_params*) params;
-					num_ctas = p2->gridDimX * p2->gridDimY * p2->gridDimZ;
-				}
+				int num_ctas = get_num_ctas(cbid, params);
 				assert(fout.good());
 				fout << "Injection data" << std::endl;
 				fout << "index: " << kernel_id << std::endl;

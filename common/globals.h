@@ -29,6 +29,53 @@
 
 #include "arch.h"
 
+//////////////////////////////////////////////////////////////////////////////////
+// Kernel launch helpers (NVBit >= 1.7, CUDA >= 12)
+//
+// CUDA 12 runtimes launch many kernels through cuLaunchKernelEx, whose params
+// struct starts with a CUlaunchConfig* (not with the CUfunction). The original
+// NVBitFI only intercepted cuLaunch/cuLaunchKernel and cast every params struct
+// to cuLaunch_params, so kernels launched via cuLaunchKernelEx were never
+// instrumented (or the cast read garbage).
+//////////////////////////////////////////////////////////////////////////////////
+inline bool is_kernel_launch(nvbit_api_cuda_t cbid) {
+	return cbid == API_CUDA_cuLaunch ||
+		cbid == API_CUDA_cuLaunchGrid ||
+		cbid == API_CUDA_cuLaunchGridAsync ||
+		cbid == API_CUDA_cuLaunchKernel ||
+		cbid == API_CUDA_cuLaunchKernel_ptsz ||
+		cbid == API_CUDA_cuLaunchCooperativeKernel ||
+		cbid == API_CUDA_cuLaunchCooperativeKernel_ptsz ||
+		cbid == API_CUDA_cuLaunchKernelEx ||
+		cbid == API_CUDA_cuLaunchKernelEx_ptsz;
+}
+
+inline bool is_launch_ex(nvbit_api_cuda_t cbid) {
+	return cbid == API_CUDA_cuLaunchKernelEx || cbid == API_CUDA_cuLaunchKernelEx_ptsz;
+}
+
+// CUfunction of the kernel being launched
+inline CUfunction get_launched_function(nvbit_api_cuda_t cbid, void *params) {
+	if (is_launch_ex(cbid)) {
+		return ((cuLaunchKernelEx_params *)params)->f;
+	}
+	return ((cuLaunch_params *)params)->f; // every other launch struct starts with CUfunction f
+}
+
+// Number of CTAs (thread blocks) of the launch, 0 if the API does not carry it
+inline int get_num_ctas(nvbit_api_cuda_t cbid, void *params) {
+	if (is_launch_ex(cbid)) {
+		const CUlaunchConfig *c = ((cuLaunchKernelEx_params *)params)->config;
+		return c->gridDimX * c->gridDimY * c->gridDimZ;
+	}
+	if (cbid == API_CUDA_cuLaunchKernel || cbid == API_CUDA_cuLaunchKernel_ptsz ||
+			cbid == API_CUDA_cuLaunchCooperativeKernel || cbid == API_CUDA_cuLaunchCooperativeKernel_ptsz) {
+		cuLaunchKernel_params *p = (cuLaunchKernel_params *)params;
+		return p->gridDimX * p->gridDimY * p->gridDimZ;
+	}
+	return 0;
+}
+
 // Output log file 
 std::string injOutputFilename = "nvbitfi-injection-log-temp.txt";
 std::ofstream  fout;

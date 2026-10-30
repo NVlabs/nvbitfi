@@ -144,13 +144,10 @@ void instrument_function_if_needed(CUcontext ctx, CUfunction func) {
  * call, is_exit=0 is entry, is_exit=1 is exit.
  * */
 void nvbit_at_cuda_event(CUcontext ctx, int is_exit, nvbit_api_cuda_t cbid, const char * name, void * params, CUresult * pStatus) {
-	if (cbid == API_CUDA_cuLaunch ||
-			cbid == API_CUDA_cuLaunchKernel_ptsz ||
-			cbid == API_CUDA_cuLaunchGrid ||
-			cbid == API_CUDA_cuLaunchGridAsync || 
-			cbid == API_CUDA_cuLaunchKernel) {
+	if (is_kernel_launch(cbid)) {
 
-		cuLaunch_params * p = (cuLaunch_params *) params;
+		/* CUfunction of the launched kernel (also for cuLaunchKernelEx) */
+		CUfunction func = get_launched_function(cbid, params);
 
 		if(!is_exit) {
 			/* if we are entering in a kernel launch:
@@ -163,31 +160,26 @@ void nvbit_at_cuda_event(CUcontext ctx, int is_exit, nvbit_api_cuda_t cbid, cons
 
 
 			pthread_mutex_lock(&mutex);
-			instrument_function_if_needed(ctx, p->f);
+			instrument_function_if_needed(ctx, func);
 
 			init_counters();
 			open_output_file(injOutputFilename);
 
 			// This is an approximation that provides >10x speedup. Here we assume that all the dynamic kernels will behave similarly.
-			std::string kname = removeSpaces(nvbit_get_func_name(ctx, p->f)).c_str();
+			std::string kname = removeSpaces(nvbit_get_func_name(ctx, func)).c_str();
 			line_buffer = get_profiled_details(kname); 
 			enable_instrumentation = (line_buffer.compare("") == 0); // if the kernel is already profiled, we will approximate the new profile to be same as the first one
-			nvbit_enable_instrumented(ctx, p->f, enable_instrumentation); // should we run the un-instrumented code? true means skip instrumentation 
+			nvbit_enable_instrumented(ctx, func, enable_instrumentation); // should we run the un-instrumented code? true means skip instrumentation 
 		}  else {
 			cudaDeviceSynchronize();
 			if(cudaGetLastError() != cudaSuccess) {
 				printf("NVBit-igprofile; ERROR FAIL in kernel execution!!\n");
 				exit(1);
 			}
-			int num_ctas = 0;
-			if ( cbid == API_CUDA_cuLaunchKernel_ptsz ||
-					cbid == API_CUDA_cuLaunchKernel) {
-				cuLaunchKernel_params * p2 = (cuLaunchKernel_params*) params;
-				num_ctas = p2->gridDimX * p2->gridDimY * p2->gridDimZ;
-			}
+			int num_ctas = get_num_ctas(cbid, params);
 			assert(fout.good());
-			std::string kname = removeSpaces(nvbit_get_func_name(ctx, p->f)).c_str();
-			// std::cout << "; kernel_name: " << kname << " " << nvbit_get_func_name(ctx, p->f) << "\n";
+			std::string kname = removeSpaces(nvbit_get_func_name(ctx, func)).c_str();
+			// std::cout << "; kernel_name: " << kname << " " << nvbit_get_func_name(ctx, func) << "\n";
 			fout << "NVBit-igprofile; index: " << kernel_id++ << "; kernel_name: " << kname 
 				<< "; ctas: " << num_ctas;
 			if (enable_instrumentation) {
