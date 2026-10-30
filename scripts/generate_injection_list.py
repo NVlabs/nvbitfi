@@ -49,7 +49,7 @@ def write_injection_list_file(app, inj_mode, igid, bfm, num_injections, total_co
 
 	while num_injections > 0 and  total_count != 0: # first two are kname and kcount
 		num_injections -= 1
-		injection_num = random.randint(0, total_count) # randomly select an injection index
+		injection_num = random.randint(0, total_count - 1) # randomly select an injection index (randint is inclusive: total_count would be out of range)
 		if igid == "rf":
 			[inj_kname, inj_kcount, inj_icount] = cf.get_rf_injection_site_info(countList, injection_num, True) # convert injection index to [kname, kernel count, inst index]
 			inj_op_id_seed = p.num_regs[app][inj_kname]*random.random() # register selection
@@ -75,15 +75,13 @@ def gen_lists(app, countList, inj_mode):
 		for bfm in p.rf_bfm_list:
 			write_injection_list_file(app, inj_mode, "rf", bfm, MAX_INJ, total_count, countList)
 	elif inj_mode == p.INST_VALUE_MODE: # instruction value injections
-		total_icounts = cf.get_total_counts(countList)
 		for igid in p.inst_value_igid_bfm_map:
 			for bfm in p.inst_value_igid_bfm_map[igid]: 
-				write_injection_list_file(app, inj_mode, igid, bfm, MAX_INJ, total_icounts[igid - p.NUM_INST_GROUPS], countList)
+				write_injection_list_file(app, inj_mode, igid, bfm, MAX_INJ, cf.get_group_count(countList, igid), countList)
 	elif inj_mode == p.INST_ADDRESS_MODE: # instruction value injections
-		total_icounts = cf.get_total_counts(countList)
 		for igid in p.inst_address_igid_bfm_map:
 			for bfm in p.inst_address_igid_bfm_map[igid]: 
-				write_injection_list_file(app, inj_mode, igid, bfm, MAX_INJ, total_icounts[igid - p.NUM_INST_GROUPS], countList)
+				write_injection_list_file(app, inj_mode, igid, bfm, MAX_INJ, cf.get_group_count(countList, igid), countList)
 
 #################################################################
 # Starting point of the script

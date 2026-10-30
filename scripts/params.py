@@ -26,7 +26,7 @@
 
 import os, sys
 
-PYTHON_P = "python"
+PYTHON_P = sys.executable # same interpreter that runs the scripts (Ubuntu 24.04 has no "python")
 
 TIMEOUT_THRESHOLD = 10 # 10X usual runtime 
 
@@ -94,17 +94,25 @@ INST_ADDRESS_MODE = "inst_address"
 # Categories of instruction types (IGIDs): This should match the values set in
 # arch.h in the nvbitfi/common/
 #######################################################################
-G_FP64 = 0
-G_FP32 = 1
-G_LD = 2
-G_PR = 3
-G_NODEST = 4 # not really an igid
-G_OTHERS = 5 
-G_GPPR = 6 # instructions that write to either a GPR or a PR register
-G_GP = 7 # instructions that write to a GPR register
-NUM_INST_GROUPS = 8
+G_FP64 = 0     # FP64 arithmetic (DADD, DFMA, DMUL, ...)
+G_FP32 = 1     # FP32 arithmetic (FADD, FFMA, FMUL, ...)
+G_LD = 2       # loads into the register file (LDG, LDS, LDSM, LDC, ...)
+G_PR = 3       # instructions that write predicate registers only (ISETP, FSETP, PLOP3, ...)
+G_NODEST = 4   # not really an igid: no register destination, never injected
+G_OTHERS = 5   # integer ALU, conversions, moves, shuffles, atomics, texture, misc
+G_TC = 6       # tensor cores (HMMA, IMMA, DMMA, QMMA, OMMA)
+G_SFU = 7      # special function unit (MUFU)
+G_FP16 = 8     # packed FP16/BF16/FP8 arithmetic (HADD2, HFMA2, ...)
+G_UNIFORM = 9  # uniform datapath: uniform registers/predicates (UIADD3, LDCU, S2UR, ...)
+G_UNKNOWN = 10 # not really an igid: opcodes missing from arch.h, never injected
+G_GPPR = 11    # aggregate: instructions that write a GPR or a predicate register
+G_GP = 12      # aggregate: instructions that write a GPR (original NVBitFI default)
+NUM_INST_GROUPS = 13
 
-IGID_STR = [ "fp64", "fp32", "ld", "pr", "nodest", "others", "gppr", "gp" ]
+IGID_STR = [ "fp64", "fp32", "ld", "pr", "nodest", "others", "tc", "sfu", "fp16", "uniform", "unknown", "gppr", "gp" ]
+
+# Register class of the corrupted destination (RegType in arch.h)
+REG_TYPE_STR = [ "GPR", "PR", "UR", "UP" ]
 
 
 #######################################################################
@@ -175,17 +183,28 @@ CAT_STR = ["Masked: Error was never read", "Masked: Write before read",
 #########################################################################
 
 # Used for instruction output-level value injection runs 
-# G_GPPR and G_GP should be equivalent because we do not inject into predicate regiters in this release. 
+# Every group can be combined with every bit-flip model. For 1-bit
+# destinations (predicates) FLIP_SINGLE_BIT/FLIP_TWO_BITS invert the predicate,
+# RANDOM_VALUE writes a random 0/1 and ZERO_VALUE writes 0.
 inst_value_igid_bfm_map = {
 	G_GP: [FLIP_SINGLE_BIT]
 
-#  Supported models
+#  Examples
 # 	G_GP: [FLIP_SINGLE_BIT, FLIP_TWO_BITS, RANDOM_VALUE, ZERO_VALUE]
+# 	G_GPPR: [FLIP_SINGLE_BIT]      # GPRs + predicate registers
+# 	G_PR: [FLIP_SINGLE_BIT]        # predicate registers only (ISETP, FSETP, ...)
+# 	G_TC: [FLIP_SINGLE_BIT]        # tensor core results
+# 	G_SFU: [FLIP_SINGLE_BIT]       # MUFU results
+# 	G_UNIFORM: [FLIP_SINGLE_BIT]   # uniform registers / uniform predicates
 # 	G_FP64: [FLIP_SINGLE_BIT, FLIP_TWO_BITS, RANDOM_VALUE, ZERO_VALUE]
 # 	G_FP32: [FLIP_SINGLE_BIT, FLIP_TWO_BITS, RANDOM_VALUE, ZERO_VALUE]
+# 	G_FP16: [FLIP_SINGLE_BIT]
 # 	G_LD: [FLIP_SINGLE_BIT, FLIP_TWO_BITS, RANDOM_VALUE, ZERO_VALUE] 
-
+# 	G_OTHERS: [FLIP_SINGLE_BIT]
 }
+
+for _igid in inst_value_igid_bfm_map:
+	assert _igid not in (G_NODEST, G_UNKNOWN), "G_NODEST and G_UNKNOWN cannot be injected"
 
 
 #########################################################################

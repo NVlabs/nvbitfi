@@ -25,7 +25,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-import os, sys, re, string, operator, math, datetime, time, signal, subprocess, shutil, glob, pkgutil
+import os, sys, re, string, operator, math, datetime, time, signal, subprocess, shutil, glob, pkgutil, json
 import params as p
 import common_functions as cf 
 
@@ -43,6 +43,7 @@ def get_seconds(td):
 # Set enviroment variables for run_script
 ###############################################################################
 [stdout_fname, stderr_fname, injection_seeds_file, new_directory] = ["", "", "", ""]
+inj_log_record = {} # fields parsed from the injector log, added to the JSONL record
 def set_env_variables(inj_mode, app, igid, bfm, icount): # Set directory paths 
 	if inj_mode == p.RF_MODE:
 		p.rf_inst = "rf"
@@ -89,6 +90,18 @@ def record_result(inj_mode, igid, bfm, app, kname, kcount, iid, opid, bid, cat, 
 	rf.write(result_str)
 	rf.close()
 
+	# One JSON object per injection with everything the ML pipeline needs
+	# (where: kernel/PC/thread/SM/warp/lane/register; what: model/mask/values;
+	# outcome: category). Written next to the .txt results file.
+	rec = {"app": app, "inj_mode": inj_mode, "igid": int(igid), "group": p.IGID_STR[int(igid)],
+		"bfm": int(bfm), "bfm_str": p.EM_STR[int(bfm)], "icount": int(icount),
+		"kernel": kname, "kcount": int(kcount), "inst_id": int(iid), "op_seed": float(opid), "bit_seed": float(bid),
+		"outcome": cat, "outcome_str": p.CAT_STR[cat-1], "runtime_s": runtime, "dmesg": dmesg}
+	rec.update(inj_log_record)
+	jf = open(res_fname[:-4] + ".jsonl", "a")
+	jf.write(json.dumps(rec) + "\n")
+	jf.close()
+
 	if has_filelock and p.use_filelock:
 		lock.release() # release lock
 
@@ -97,7 +110,8 @@ def record_result(inj_mode, igid, bfm, app, kname, kcount, iid, opid, bid, cat, 
 		if not os.path.isdir(p.app_log_dir[app] + "/sdcs"): os.system("mkdir -p " + p.app_log_dir[app] + "/sdcs") # create directory to store sdcs 
 		full_sdc_dir = p.app_log_dir[app] + "/sdcs/sdc-" + app + "-icount" +  icount
 		os.system("mkdir -p " + full_sdc_dir) # create directory to store sdc
-		map((lambda x: shutil.copy(x, full_sdc_dir)), [stdout_fname, stderr_fname, injection_seeds_file, new_directory + "/" + p.output_diff_log]) # copy stdout, stderr injection seeds, output diff
+		for x in [stdout_fname, stderr_fname, injection_seeds_file, new_directory + "/" + p.output_diff_log]: # copy stdout, stderr injection seeds, output diff
+			if os.path.isfile(x): shutil.copy(x, full_sdc_dir) # (map() is lazy in Python 3: the original copied nothing)
 		shutil.make_archive(full_sdc_dir, 'gztar', full_sdc_dir) # archieve the outputs
 		shutil.rmtree(full_sdc_dir, True) # remove the directory
 
@@ -130,22 +144,27 @@ def create_p_file(p_filename, igid, bfm, kname, kcount, iid, opid, bid):
 ###############################################################################
 def get_inj_info():
 	[value_str, pc, inst_type, tid, injBID] = ["", "", "", -1, -1]
-	if os.path.isfile(p.inj_run_log): 
-		logf = open(p.inj_run_log, "r")
-		for line in logf:
-                        if "beforeVal" in line:
-                            value_str = line.strip().replace("beforeVal: ", "value_before").replace(";afterVal: ", ":value_after")
-                        if "opcode" in line:
-                            inst_type = line.split(":")[1].strip()
-                        if "pcOffset" in line:
-                            pc = line.split(":")[1].strip()
-                        if "tid" in line:
-                            tid = line.split(":")[1].strip()
-                        if "mask" in line:
-                            injBID = line.split(":")[1].strip()
-
-		logf.close()
+	info = read_inj_log()
+	if "beforeVal" in info:
+		value_str = "value_before" + info["beforeVal"] + ":value_after" + info.get("afterVal", "")
+	inst_type = info.get("opcode", "")
+	pc = info.get("pcOffset", "")
+	tid = info.get("tid", -1)
+	injBID = info.get("mask", -1)
 	return [value_str, pc, inst_type, tid, injBID]
+
+# Parse the injector log (nvbitfi-injection-log-temp.txt) into a dict.
+# Lines are "key: value" (beforeVal and afterVal share one line, separated by ';').
+def read_inj_log():
+	info = {}
+	if os.path.isfile(p.inj_run_log):
+		for line in open(p.inj_run_log, "r"):
+			for part in line.strip().split(";"):
+				if ":" in part:
+					k, v = part.split(":", 1)
+					info[k.strip()] = v.strip()
+		info["errorInjected"] = "Error not injected" not in open(p.inj_run_log, "r").read()
+	return info
 
 ###############################################################################
 # Classify error injection result based on stdout, stderr, application output,
@@ -229,8 +248,10 @@ def classify_injection(app, igid, kname, kcount, iid, opid, bid, retcode, dmesg_
 		return p.OTHERS
 
 def cmdline(command):
-	process = subprocess.Popen(args=command, stdout=subprocess.PIPE, shell=True)
-	return process.communicate()[0]
+	# stderr discarded: on Ubuntu >= 20.10 "dmesg" needs root (kernel.dmesg_restrict=1);
+	# allow it with "sudo sysctl kernel.dmesg_restrict=0" to record Xid errors.
+	process = subprocess.Popen(args=command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, shell=True)
+	return process.communicate()[0].decode("utf-8", errors="replace")
 
 ###############################################################################
 # Check for timeout and kill the job if it has passed the threshold
@@ -249,7 +270,7 @@ def is_timeout(app, pr): # check if the process is active every 'factor' sec for
 		to_th -= 1
 		time.sleep(factor)
 
-	if to_th == 0:
+	if to_th <= 0: # (to_th is a float: "== 0" could be skipped)
 		os.killpg(pr.pid, signal.SIGINT) # pr.kill()
 		print ("timeout")
 		return [True, pr.poll()]
@@ -257,8 +278,13 @@ def is_timeout(app, pr): # check if the process is active every 'factor' sec for
 		return [False, retcode]
 
 def get_dmesg_delta(dm_before, dm_after):
-	llb = dm_before.splitlines()[-1] # last lin
+	lines = dm_before.splitlines()
+	if len(lines) == 0: # dmesg not readable or empty
+		return str(dm_after)
+	llb = lines[-1] # last line
 	pos = dm_after.find(llb)
+	if pos < 0: # ring buffer wrapped
+		return str(dm_after)
 	return str(dm_after[pos+len(llb)+1:])
 
 ###############################################################################
@@ -293,6 +319,17 @@ def run_one_injection_job(inj_mode, igid, bfm, app, kname, kcount, iid, opid, bi
 	if p.verbose: os.system("cat " + p.stdout_file + " " + p.stderr_file)
 	
 	value_str = ""
+	global inj_log_record
+	log = read_inj_log()
+	inj_log_record = {
+		"injected": bool(log.get("errorInjected", False)) and "regType" in log and log.get("regType") != "NONE",
+		"opcode": log.get("opcode", ""), "pc": log.get("pcOffset", ""),
+		"reg_type": log.get("regType", ""), "reg_no": int(log.get("regNo", -1)),
+		"mask": log.get("mask", ""), "before": log.get("beforeVal", ""), "after": log.get("afterVal", ""),
+		"tid": int(log.get("tid", -1)), "cta": int(log.get("ctaID", -1)), "sm": int(log.get("smID", -1)),
+		"warp_slot": int(log.get("warpID", -1)), "lane": int(log.get("laneID", -1)),
+		"group_instrs": int(log.get("groupInstrs", -1)), "ctas": int(log.get("ctas", -1)),
+	}
 	if timeout_flag:
 		[value_str, pc, inst_type, tid, injBID] = get_inj_info()
 		ret_cat = p.TIMEOUT 

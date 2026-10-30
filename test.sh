@@ -85,23 +85,23 @@ cd $CWD
 ###############################################################################
 cd scripts/
 printf "\nStep 1 (1): Profile the application\n"
-python run_profiler.py
+python3 run_profiler.py
 rm -f stdout.txt stderr.txt ### cleanup
 cd -
 
 cd scripts/
 printf "\nStep 1 (2): Generate injection list for instruction-level error injections\n"
-python generate_injection_list.py 
+python3 generate_injection_list.py 
 
 ################################################
 # Step 2: Run the error injection campaign 
 ################################################
 printf "\nStep 2: Run the error injection campaign"
-python run_injections.py standalone # to run the injection campaign on a single machine with single gpu
+python3 run_injections.py standalone # to run the injection campaign on a single machine with single gpu
 
 ################################################
 # Step 3: Parse the results
 ################################################
 printf "\nStep 3: Parse results"
-python parse_results.py
+python3 parse_results.py
 

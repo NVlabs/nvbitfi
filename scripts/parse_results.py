@@ -95,18 +95,25 @@ inst_count = {}
 def populate_inst_fraction():
 	global inst_fraction
 	for app in results_app_table:
-		inst_counts = cf.get_total_counts(cf.read_inst_counts(p.app_log_dir[app], app))
-		total = cf.get_total_insts(cf.read_inst_counts(p.app_log_dir[app], app), False)
+		countList = cf.read_inst_counts(p.app_log_dir[app], app)
+		totals = cf.get_total_counts(countList)
+		names = cf.get_opcode_names(countList) + p.IGID_STR
+		total = cf.get_total_insts(countList, False)
+		inst_counts = [totals.get(n, 0) for n in names]
 		inst_fraction[app] = [total] + [1.0*i/total for i in inst_counts]
 		inst_count[app] = inst_counts 
+		inst_names[app] = names
 
 ###############################################################################
 # Print instruction distribution to a txt file
+# (opcode columns: fraction of executed instructions; group columns: fraction
+#  of injectable instances of the group)
 ###############################################################################
+inst_names = {}
 def print_inst_fractions_tsv():
 	f = open(fname_prefix + "instruction-fractions.tsv", "w")
-	f.write("\t".join(["App", "Total"] + cf.get_inst_count_format().split(':')[2:]) + "\n")
 	for app in inst_fraction: 
+		f.write("\t".join(["App", "Total"] + inst_names[app]) + "\n")
 		f.write("\t".join([app] + list(map(str, inst_fraction[app]))) + "\n")
 	f.close()
 
