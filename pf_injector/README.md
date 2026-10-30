@@ -6,7 +6,9 @@ pf_injector.so expects nvbitfi-injection-info.txt file to be present in the curr
 * SM ID: 0-Max SMs in the GPU being used
 * Lane ID: 0-31
 * Mask: uint32 number used to inject error into the destination register (corrupted value = Mask XOR original value)
-* opcode ID: 0-171 (see enum InstructionType in common/arch.h for the mapping). 171: all opcodes.
+* opcode: name of the opcode (e.g. `IMAD`, `FFMA`, `HMMA`), `ALL` for every opcode, or its numeric index in the opcode table of common/arch.h. Names are recommended: the table (and therefore the indices) changed in NVBitFI_for_ODC.
+
+The permanent fault corrupts the first destination GPR of the selected instructions; uniform-datapath instructions are not targeted and predicated-out instances are skipped.
 
 Example usage: `LD_PRELOAD=<path-to-so>/pf_injector.so <path-to-workload>/simple_add; cat nvbitfi-injection-log-temp.txt`.  A sample nvbitfi-injection-info.txt is provided to test the tool on the provided simple_add test-app. 
 

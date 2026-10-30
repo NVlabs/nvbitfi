@@ -20,25 +20,32 @@
 #include "utils/utils.h"
 #include "arch.h"
 
-// Global counters are incremented once per warp 
-extern "C" __device__ __noinline__ void count_instrs(uint64_t pcounters, int index, int grp_index, int predicate, int num_counters) {    
+// Called BEFORE every SASS instruction. Counts dynamic instances per opcode
+// and the INJECTABLE instances per group (eligibility decided on the host,
+// see eligibility_flags() in common/globals.h). The injector uses exactly the
+// same rules, so an injection index drawn from this profile points to the
+// same dynamic instance in the injection run.
+//
+// One leader thread per warp performs the atomics (warp-aggregated).
+// Regular instructions count one per thread whose guard predicate is true;
+// uniform-datapath instructions execute once per warp and count 1.
+extern "C" __device__ __noinline__ void count_instrs(uint64_t pcounters, int opcode, int grp, int flags, int predicate) {
 	uint64_t *counters = (uint64_t*)pcounters;
 
-	// Optimization: Instead of all the threads in a warp performing atomicAdd,
-	// let's count the number of active threads with predicate=1 in a warp and let just one thread
-	// (leader) in the warp perform the atomicAdd
-	const unsigned active_mask = __activemask(); // __ballot without .sync is illegal on sm_70+
-	const int leader = __ffs(active_mask) - 1;
-	const int laneid = get_laneid();
-
-	// compute the predicate mask 
+	const unsigned active_mask = __activemask();
 	const unsigned predicate_mask = __ballot_sync(active_mask, predicate);
-	const int num_threads = __popc(predicate_mask);
+	if (predicate_mask == 0) return;
 
-	if (laneid == leader) { // Am I the leader thread
-		atomicAdd((unsigned long long *)&counters[index], num_threads);
-		atomicAdd((unsigned long long *)&counters[NUM_ISA_INSTRUCTIONS+grp_index], num_threads);
-		atomicAdd((unsigned long long *)&counters[num_counters-2], num_threads*(grp_index != G_NODEST));
-		atomicAdd((unsigned long long *)&counters[num_counters-1], num_threads*(1 - ((grp_index == G_NODEST) || (grp_index == G_PR))));
-	}
+	const int leader = __ffs(predicate_mask) - 1;
+	if (get_laneid() != leader) return;
+
+	const unsigned long long n = (flags & FLAG_UNIFORM) ? 1ULL : (unsigned long long)__popc(predicate_mask);
+
+	atomicAdd((unsigned long long *)&counters[opcode], n);
+	if (flags & FLAG_ELIG_OWN)
+		atomicAdd((unsigned long long *)&counters[NUM_OPCODE_COUNTERS+grp], n);
+	if (flags & FLAG_ELIG_GPPR)
+		atomicAdd((unsigned long long *)&counters[NUM_COUNTERS-2], n);
+	if (flags & FLAG_ELIG_GP)
+		atomicAdd((unsigned long long *)&counters[NUM_COUNTERS-1], n);
 }

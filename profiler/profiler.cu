@@ -76,7 +76,6 @@ void nvbit_at_init() {
 		verbose = 0;
 	}
 
-	initInstTypeNameMap();
 }
 
 /* Set used to avoid re-instrumenting the same functions multiple times */
@@ -111,28 +110,22 @@ void instrument_function_if_needed(CUcontext ctx, CUfunction func) {
 
 		/* We iterate on the vector of instruction */
 		for (auto i : instrs) {
-			if (verbose==2) { 
-				printf("begin..\n");
-			}
-			// printf("instruction: %s\n", i.sass.c_str());
-			std::string opcode = i->getOpcode(); 
-			std::string instType = extractInstType(opcode); 
+			/* opcode, exclusive group, destination registers and eligibility
+			 * flags (common/dests.h); same analysis as the injector */
+			StaticInstInfo si = analyze_instr(i);
+			if (si.opcode == UNKNOWN_OPCODE) warn_unknown_opcode(i);
 
-			if (verbose) { 
-				i->print();
-				printf("extracted instType: %s\n", instType.c_str());
-				printf("index of instType: %d\n", instTypeNameMap[instType]);
+			if (verbose) {
+				printf("0x%04x %-10s grp=%-8s dests=%-16s flags=0x%x  %s\n", i->getOffset(),
+						instTypeNames[si.opcode], instGrouptNames[si.group], si.dests.str().c_str(), si.flags, i->getSass());
 			}
 
 			nvbit_insert_call(i, "count_instrs", IPOINT_BEFORE);
 			nvbit_add_call_arg_const_val64(i, (uint64_t)counters);
-			nvbit_add_call_arg_const_val32(i, instTypeNameMap[instType]);
-			nvbit_add_call_arg_const_val32(i, getOpGroupNum(instTypeNameMap[instType]));
+			nvbit_add_call_arg_const_val32(i, si.opcode);
+			nvbit_add_call_arg_const_val32(i, si.group);
+			nvbit_add_call_arg_const_val32(i, si.flags);
 			nvbit_add_call_arg_guard_pred_val(i); //pass predicate value 
-			nvbit_add_call_arg_const_val32(i, NUM_COUNTERS);
-			if (verbose==2) { 
-				printf("end..\n");
-			}
 		}
 	}
 }
@@ -183,12 +176,12 @@ void nvbit_at_cuda_event(CUcontext ctx, int is_exit, nvbit_api_cuda_t cbid, cons
 			fout << "NVBit-igprofile; index: " << kernel_id++ << "; kernel_name: " << kname 
 				<< "; ctas: " << num_ctas;
 			if (enable_instrumentation) {
-				fout << "; instrs: " << get_inst_count(true) << ";" ;
+				fout << "; instrs: " << get_inst_count() << ";" ;
 				for (int i=0; i<NUM_COUNTERS; i++) {
-					if (i < NUM_ISA_INSTRUCTIONS) {
+					if (i < NUM_OPCODE_COUNTERS) {
 						fout << " " << instTypeNames[i] << ": " << counters[i] << ",";
 					} else {
-						fout << " " << instGrouptNames[i-NUM_ISA_INSTRUCTIONS] << ": " << counters[i] << ",";
+						fout << " " << instGrouptNames[i-NUM_OPCODE_COUNTERS] << ": " << counters[i] << ",";
 					}
 				}
 			} else {

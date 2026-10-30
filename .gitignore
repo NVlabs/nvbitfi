@@ -5,3 +5,4 @@
 logs/
 __pycache__/
 *.pyc
+tests/dests_test

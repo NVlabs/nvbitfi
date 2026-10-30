@@ -2,7 +2,8 @@ TARGET = simple_add
 
 # CUDA
 NVCC = `which nvcc`
-ARCH=35
+# sm_120 = Blackwell RTX / RTX PRO; override with e.g. make ARCH=89
+ARCH ?= 120
 
 all: clean $(TARGET) 
 

@@ -82,13 +82,27 @@ void parse_params(std::string filename) {
 
 						ifs >> inj_info.injMask; 
 
-						ifs >> inj_info.injInstType; // instruction type
-						assert(inj_info.injInstType <= NUM_ISA_INSTRUCTIONS); // ensure that the value is in the expected range
+						// instruction type: opcode name (e.g. FFMA, HMMA), "ALL", or numeric index
+						// (0..NUM_ISA_INSTRUCTIONS-1 = one opcode of common/arch.h, NUM_ISA_INSTRUCTIONS = all)
+						std::string instType;
+						ifs >> instType;
+						if (instType == "ALL") {
+								inj_info.injInstType = NUM_ISA_INSTRUCTIONS;
+						} else if (!instType.empty() && isdigit(instType[0])) {
+								inj_info.injInstType = atoi(instType.c_str());
+						} else {
+								inj_info.injInstType = opcode_index(instType);
+								if (inj_info.injInstType == UNKNOWN_OPCODE) {
+										printf("pf_injector: opcode %s is not in common/arch.h\n", instType.c_str());
+										assert(false);
+								}
+						}
+						assert(inj_info.injInstType <= NUM_ISA_INSTRUCTIONS);
 
 				} else {
 						printf(" File %s does not exist!", filename.c_str());
 						printf(" This file should contain enough information about the fault site to perform a permanent error injection run: ");
-						printf("(1) SM ID, (2) Lane ID (within a warp), (3) 32-bit mask (as int32), (4) Instruction type (as integer, see maxwell_pascal.h). \n"); 
+						printf("(1) SM ID, (2) Lane ID (within a warp), (3) 32-bit mask (as int32), (4) Instruction type (opcode name such as FFMA, ALL, or opcode index in common/arch.h). \n"); 
 						assert(false);
 				}
 				ifs.close();
@@ -109,10 +123,10 @@ void update_verbose() {
 		}
 }
 
-int get_maxregs(CUfunction func) {
-		int maxregs = -1;
-		cuFuncGetAttribute(&maxregs, CU_FUNC_ATTRIBUTE_NUM_REGS, func);
-		return maxregs;
+int get_maxregs(CUcontext ctx, CUfunction func) {
+		func_config_t config;
+		nvbit_get_func_config(ctx, func, &config);
+		return config.num_registers;
 }
 
 void INThandler(int sig) {
@@ -154,7 +168,6 @@ void nvbit_at_init() {
 
 		// GET_VAR_INT(verbose, "TOOL_VERBOSE", 0, "Enable verbosity inside the tool (1, 2, 3,..)");
 
-		initInstTypeNameMap();
 
 		signal(SIGINT, INThandler); // install Ctrl-C handler
 
@@ -191,66 +204,28 @@ void instrument_function_if_needed(CUcontext ctx, CUfunction func) {
 				/* Get the vector of instruction composing the loaded CUFunction "func" */
 				const std::vector<Instr *> &instrs = nvbit_get_instrs(ctx, f);
 
-				int maxregs = get_maxregs(f);
+				int maxregs = get_maxregs(ctx, f);
 				assert(fout.good());
 				fout << "Inspecting: " << kname << ";num_static_instrs: " << instrs.size() << ";maxregs: " << maxregs << "(" << maxregs << ")" << std::endl;
 				for(auto i: instrs)  {
-						std::string opcode = i->getOpcode(); 
-						std::string instTypeStr = extractInstType(opcode); 
-						int instType = instTypeNameMap[instTypeStr]; 
-						if (verbose) printf("extracted instType: %s, ", instTypeStr.c_str());
-						if (verbose) printf("index of instType: %d\n", instTypeNameMap[instTypeStr]);
-						if ((uint32_t)instType == inj_info.injInstType || inj_info.injInstType == NUM_ISA_INSTRUCTIONS) {
-								if (verbose) { printf("instruction selected for instrumentation: "); i->print(); }
-
-								// Tokenize the instruction 
-								std::vector<std::string> tokens;
-								std::string buf; // a buffer string
-								std::stringstream ss(i->getSass()); // Insert the string into a stream
-								while (ss >> buf)
-										tokens.push_back(buf);
-
-								int destGPRNum = -1;
-								int numDestGPRs = 0;
-
-								if (tokens.size() > 1) { // an actual instruction that writes to either a GPR or PR register
-										if (verbose) printf("num tokens = %ld \n", tokens.size());
-										int start = 1; // first token is opcode string
-										if (tokens[0].find('@') != std::string::npos) { // predicated instruction, ignore first token
-												start = 2; // first token is predicate and 2nd token is opcode
-										}
-
-										// Parse the first operand - this is the first destination
-										int regnum1 = -1;
-										int regtype = extractRegNo(tokens[start], regnum1);
-										if (regtype == 0) { // GPR reg
-												destGPRNum = regnum1;
-												numDestGPRs = (getOpGroupNum(instType) == G_FP64) ? 2 : 1;
-
-												int szStr = extractSize(opcode); 
-												if (szStr == 128) {
-														numDestGPRs = 4; 
-												} else if (szStr == 64) {
-														numDestGPRs = 2; 
-												}
-
-												nvbit_insert_call(i, "inject_error", IPOINT_AFTER);
-												nvbit_add_call_arg_const_val64(i, (uint64_t)&inj_info);
-												nvbit_add_call_arg_const_val64(i, (uint64_t)&verbose_device);
-
-												nvbit_add_call_arg_const_val32(i, destGPRNum); // destination GPR register number
-												if (destGPRNum != -1) {
-														nvbit_add_call_arg_reg_val(i, destGPRNum); // destination GPR register val
-												} else {
-														nvbit_add_call_arg_const_val32(i, (unsigned int)-1); // destination GPR register val 
-												}
-												nvbit_add_call_arg_const_val32(i, numDestGPRs); // number of destination GPR registers
-
-												nvbit_add_call_arg_const_val32(i, maxregs); // max regs used by the inst info
-
-										}
-										// If an instruction has two destination registers, not handled!! (TODO: Fix later)
+						/* destination registers from NVBit's decoded operands (common/dests.h) */
+						StaticInstInfo si = analyze_instr(i);
+						if (si.opcode == UNKNOWN_OPCODE) warn_unknown_opcode(i);
+						bool opcodeMatch = ((uint32_t)si.opcode == inj_info.injInstType || inj_info.injInstType == NUM_ISA_INSTRUCTIONS);
+						// The permanent fault model corrupts the first destination GPR (per-lane datapath).
+						// Uniform-datapath instructions write uniform registers, not GPRs: not targeted.
+						if (opcodeMatch && si.group != G_UNIFORM && si.dests.num_gpr > 0) {
+								if (verbose) {
+										printf("instruction selected for instrumentation: 0x%04x %s dests=%s\n", i->getOffset(), i->getSass(), si.dests.str().c_str());
 								}
+								nvbit_insert_call(i, "inject_error", IPOINT_AFTER);
+								nvbit_add_call_arg_const_val64(i, (uint64_t)&inj_info);
+								nvbit_add_call_arg_const_val64(i, (uint64_t)&verbose_device);
+								nvbit_add_call_arg_const_val32(i, si.dests.gpr_base); // destination GPR register number
+								nvbit_add_call_arg_reg_val(i, si.dests.gpr_base); // destination GPR register val
+								nvbit_add_call_arg_const_val32(i, si.dests.num_gpr); // number of destination GPR registers
+								nvbit_add_call_arg_const_val32(i, maxregs); // max regs used by the inst info
+								nvbit_add_call_arg_guard_pred_val(i); // predicated-out instances are not corrupted
 						}
 				}
 		}

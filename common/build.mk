@@ -25,6 +25,7 @@ else
 NVCC_OPT = -O3
 endif
 
+ifneq ($(MAKECMDGOALS),clean)  # no toolchain checks needed to clean
 NVCC_VER_REQ = 12.0
 NVCC_VER = $(shell $(NVCC) --version | grep release | cut -f2 -d, | cut -f3 -d' ')
 NVCC_VER_CHECK = $(shell echo "$(NVCC_VER) >= $(NVCC_VER_REQ)" | bc)
@@ -41,6 +42,7 @@ ifeq ($(PTXAS_VER_CHECK),0)
 MAXRREGCOUNT_FLAG = -maxrregcount=24
 else
 MAXRREGCOUNT_FLAG =
+endif
 endif
 
 INCLUDES = -I$(NVBIT_PATH) -I../common

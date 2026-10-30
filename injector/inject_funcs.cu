@@ -1,19 +1,30 @@
 /*
  * Copyright 2020, NVIDIA CORPORATION.
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * NVBitFI_for_ODC (2026): injection split in two calls.
+ *
+ *  inject_select (IPOINT_BEFORE) counts the injectable dynamic instances of
+ *    the selected group exactly like the profiler (same point, same guard
+ *    predicate, same eligibility) and marks the selected (thread, PC).
+ *    Counting AFTER the instruction, as the original did, miscounts
+ *    instructions that overwrite their own guard predicate (@P0 ISETP P0, ...)
+ *    and never runs for EXIT/branches.
+ *  inject_error (IPOINT_AFTER) corrupts one destination register of the
+ *    selected instance: GPR, predicate (P0-P6), uniform register or uniform
+ *    predicate, using the NVBit 1.8 register read/write device API.
  */
-
 
 #include <stdint.h>
 #include <stdio.h>
@@ -23,152 +34,183 @@
 #include "injector.h"
 #include "arch.h"
 
-// flatten thread id
-__inline__ __device__ int get_flat_tid() {
-	int tid_b = threadIdx.x + (blockDim.x * (threadIdx.y + (threadIdx.z * blockDim.y))); // thread id within a block
-	int bid = blockIdx.x + (gridDim.x * (blockIdx.y + (blockIdx.z * gridDim.y))); // block id 
-	int tid = tid_b + (bid * blockDim.x * blockDim.y * blockDim.z);
-	return tid;
+__inline__ __device__ int get_flat_tid_in_cta() {
+	return threadIdx.x + (blockDim.x * (threadIdx.y + (threadIdx.z * blockDim.y)));
 }
 
-// Get bit-mask for error injection. Old value will be XORed with this mask later to inject the error. 
-__inline__ 
-__device__ unsigned int get_mask(uint32_t bitFlipModel, float bitIDSeed, unsigned int oldVal) {
-	return (bitFlipModel == FLIP_SINGLE_BIT) * ((unsigned int)1<<(int)(32*bitIDSeed)) + 
-		(bitFlipModel == FLIP_TWO_BITS) * ((unsigned int)3<<(int)(31*bitIDSeed)) + 
-		(bitFlipModel == RANDOM_VALUE)  * (((unsigned int)-1) * bitIDSeed) +
+__inline__ __device__ int get_flat_cta() {
+	return blockIdx.x + (gridDim.x * (blockIdx.y + (blockIdx.z * gridDim.y)));
+}
+
+__inline__ __device__ int get_flat_tid() {
+	return get_flat_tid_in_cta() + get_flat_cta() * (blockDim.x * blockDim.y * blockDim.z);
+}
+
+// get_laneid(), get_smid(), get_warpid() come from NVBit's utils/utils.h
+
+// XOR mask for a 32-bit register. The old value will be XORed with it.
+__inline__ __device__ unsigned int get_mask(uint32_t bitFlipModel, float bitIDSeed, unsigned int oldVal) {
+	int b1 = min((int)(32 * bitIDSeed), 31);
+	int b2 = min((int)(31 * bitIDSeed), 30);
+	return (bitFlipModel == FLIP_SINGLE_BIT) * (1u << b1) +
+		(bitFlipModel == FLIP_TWO_BITS) * (3u << b2) +
+		(bitFlipModel == RANDOM_VALUE)  * (unsigned int)(((unsigned int)-1) * bitIDSeed) +
 		(bitFlipModel == ZERO_VALUE) * oldVal;
 }
 
-extern "C" __device__ __noinline__ void inject_error(uint64_t piinfo, uint64_t pcounters, uint64_t pverbose_device, 
-			int offset, int index, int grp_index,  int predicate, int destGPRNum, int regval, 
-			int numDestGPRs, int destPRNum1, int destPRNum2, int maxRegs) {
-
-	inj_info_t* inj_info = (inj_info_t*)piinfo; 
-	uint32_t verbose_device = *((uint32_t *)pverbose_device);
- 	uint64_t * counters = (uint64_t *)pcounters;
-
- 	if (verbose_device)
- 		inj_info->debug[NUM_DEBUG_VALS-1] = 1;
-	// if error is injected, return
- 	if (inj_info->errorInjected)
- 		return;
-	// Check if this is the kernel of interest. 
-	// Sanity check - we shouldn't be here if this is not the kernel of interest. 
- 	if (!inj_info->areParamsReady)
- 		return; // This is not the selected kernel. No need to proceed.
- 
-	// Proceed only if the instruction is not predicated out, i.e., proceed only if the the predicate value is 1. 
-	// We do not want to inject an error into the instruction that's predicated out.
-	if (predicate == 0)
-		return;
-
- 	unsigned long long currCounter1 = atomicAdd((unsigned long long *)&counters[NUM_ISA_INSTRUCTIONS+grp_index], 1);
- 	unsigned long long currCounter2 = atomicAdd((unsigned long long *)&counters[NUM_COUNTERS-2], (grp_index != G_NODEST));
- 	unsigned long long currCounter3 = atomicAdd((unsigned long long *)&counters[NUM_COUNTERS-1], 1 - ((grp_index == G_NODEST) || (grp_index == G_PR)));
- 
-	uint32_t igid = inj_info->groupID;
- 	if ((igid == G_GPPR && grp_index == G_NODEST) ||  // not a GPPR instruction
- 			(igid == G_GP && ((grp_index == G_NODEST) || (grp_index == G_PR))) || // not the G_GP instructiop 
- 			(igid < G_NODEST &&  grp_index != igid)) // this is not the instruction from the selected group
- 		return; // This is not the selected intruction group 
-  
-	bool injectFlag = false;
- 	switch (igid) {
- 		case G_FP32: // inject into one of the dest reg 
- 		case G_FP64: // inject into one of the regs written by the inst
- 		case G_LD: // inject into one of the regs written by the inst
- 		case G_PR: // inject into pr register
- 			if(inj_info->instID == currCounter1) {
- 				injectFlag = true;
- 			}
- 			break; 
- 		case G_GPPR: // inject into one of the GPR or PR destination register
- 			if(inj_info->instID == currCounter2) {
- 				injectFlag = true;
- 			}
- 			break;
- 		case G_GP: // inject into one of the GPR destination register
- 			if(inj_info->instID == currCounter3) {
- 				injectFlag = true;
- 			}
- 			break;
- 		case G_NODEST: // do nothing
- 		default:  break;
- 	}
-  
-   	if (verbose_device && injectFlag) 
-		printf("inj_info->instID=%ld, %ld, %ld, %ld\n", inj_info->instID, currCounter1, currCounter2, currCounter3);
-
-	if (injectFlag) {
-		// assert(0 == 10);
-		if (verbose_device)
-			printf("offset=0x%x, igid:%d, destGPRNum=%d, grp_index=%d\n", offset, igid, destGPRNum, grp_index); 
-		// We need to randomly select one register from numDestGPRs + (destPRNum1 != -1) + (destPRNum2 != -1)
-		int totalDest = numDestGPRs + (destPRNum1 != -1) + (destPRNum2 != -1);
-		assert(totalDest > 0);
-		int injDestID = totalDest*inj_info->opIDSeed;
-		if (injDestID < numDestGPRs) {
-			if (destGPRNum != -1) {
- 				// for debugging
- 				inj_info->debug[0] = maxRegs; 
- 				inj_info->debug[1] = destGPRNum; 
- 				inj_info->debug[2] = regval; 
- 				inj_info->debug[3] = nvbit_read_reg((uint64_t)destGPRNum); // read the register value 
- 				inj_info->debug[4] = nvbit_read_reg((uint64_t)0); // read the register value 
- 				inj_info->debug[5] = nvbit_read_reg((uint64_t)1); // read the register value 
- 				inj_info->debug[6] = nvbit_read_reg((uint64_t)2); // read the register value 
- 				inj_info->debug[7] = nvbit_read_reg((uint64_t)3); // read the register value 
- 				inj_info->debug[8] = nvbit_read_reg((uint64_t)4); // read the register value 
- 				inj_info->debug[9] = nvbit_read_reg((uint64_t)5); // read the register value 
- 				inj_info->debug[10] = nvbit_read_reg((uint64_t)6); // read the register value 
- 				atomicAdd(&(inj_info->debug[11]),1); 
- 				inj_info->debug[12] = index; 
- 				inj_info->debug[13] = offset; 
- 
- 				inj_info->regNo = destGPRNum+injDestID; // record the register number
- 				inj_info->beforeVal = nvbit_read_reg((uint64_t)inj_info->regNo); // read the register value
- 				inj_info->mask = get_mask(inj_info->bitFlipModel, inj_info->bitIDSeed, inj_info->beforeVal); // bit-mask for error injection
- 				if (DUMMY) { // no error is injected
- 					inj_info->afterVal = inj_info->beforeVal;
- 				} else {
- 					inj_info->afterVal = inj_info->beforeVal ^ inj_info->mask; 
- 					nvbit_write_reg((uint64_t)inj_info->regNo, inj_info->afterVal);
- 				}
- 				inj_info->opcode = index;  // record the opcode where the injection is performed
- 				inj_info->pcOffset = offset;  // record the pc where the injection is performed (offset from the beginning of the function)
- 				inj_info->tid = get_flat_tid(); // record the thread ID where the injection is performed
- 				inj_info->errorInjected = true; // perf optimization
- 				assert(inj_info->debug[12] == inj_info->opcode);
- 				assert(inj_info->debug[13] == inj_info->pcOffset);
- 				if (verbose_device) 
- 					printf("done here\n"); 
-			} else {
-				assert(0 == 2); 
-			}
-		} else { 
- 
- 			// printf(":::ERROR Error injection into predicate registers is not supported by NVBit (as of April 10, 2020);"); 
- 
- 			// // assert(0 == 4); 
- 			// if (destPRNum1 != -1 && destPRNum2 != -1) { // we want to inject into destPRNum1/destPRNum2 if it's not -1
- 			//   inj_info->regNo = injDestID == numDestGPRs ? destPRNum1 : destPRNum2;
- 			// } else if (destPRNum1 != -1) {
- 			//   inj_info->regNo = destPRNum1;
- 			// } else if (destPRNum2 != -1) {
- 			//   inj_info->regNo = destPRNum2;
- 			// }
- 			// inj_info->beforeVal = read_predicate_reg(maxRegs, spillAddr, inj_info->regNo); // read the register value before writing
- 			// if (DUMMY) {
- 			//   inj_info->afterVal = inj_info->beforeVal;
- 			// } else {
- 			//   inj_info->afterVal = flip_predicate_reg(maxRegs, spillAddr, inj_info->regNo); // inject the error and record the value after injection
- 			// }
- 			// inj_info->opcode = index;  // record the opcode where the injection is performed
- 			// inj_info->pcOffset = offset;  // record the pc where the injection is performed (offset from the beginning of the function)
- 			// inj_info->tid = get_flat_tid(); // record the thread ID where the injection is performed
- 			// inj_info->errorInjected = true; // perf optimization
-		}
- 	}
+// New value of a 1-bit predicate. Flip models invert it (a 1-bit register
+// has no "two adjacent bits"), RANDOM_VALUE draws 0/1, ZERO_VALUE clears it.
+__inline__ __device__ unsigned int corrupt_pred_bit(uint32_t bitFlipModel, float bitIDSeed, unsigned int oldBit) {
+	if (bitFlipModel == RANDOM_VALUE) return bitIDSeed >= 0.5f ? 1u : 0u;
+	if (bitFlipModel == ZERO_VALUE) return 0u;
+	return oldBit ^ 1u;
 }
 
+// k-th set bit (0-based) of mask
+__inline__ __device__ int nth_set_bit(uint32_t mask, int k) {
+	for (int b = 0; b < 32; b++) {
+		if (mask >> b & 1) { if (k == 0) return b; k--; }
+	}
+	return -1;
+}
+
+// ---------------------------------------------------------------------------
+// BEFORE: count and select
+// ---------------------------------------------------------------------------
+extern "C" __device__ __noinline__ void inject_select(uint64_t piinfo, uint64_t pcounters,
+		int offset, int opcode, int grp, int flags, int predicate) {
+	inj_info_t* inj_info = (inj_info_t*)piinfo;
+	uint64_t *counters = (uint64_t *)pcounters;
+
+	if (!inj_info->areParamsReady || inj_info->selected) return; // not the kernel of interest / already selected
+
+	// Same eligibility rules as the profiler (count_instrs)
+	const int igid = inj_info->groupID;
+	bool elig;
+	int ctr;
+	if (igid == G_GPPR) { elig = flags & FLAG_ELIG_GPPR; ctr = NUM_COUNTERS - 2; }
+	else if (igid == G_GP) { elig = flags & FLAG_ELIG_GP; ctr = NUM_COUNTERS - 1; }
+	else { elig = (grp == igid) && (flags & FLAG_ELIG_OWN); ctr = NUM_OPCODE_COUNTERS + igid; }
+	if (!elig) return; // static property: the whole warp returns together
+
+	const unsigned active_mask = __activemask();
+	const unsigned pred_mask = __ballot_sync(active_mask, predicate);
+	if (!predicate) return; // predicated-out threads do not execute the instruction
+
+	const int lane = get_laneid();
+	const int leader = __ffs(pred_mask) - 1;
+	const bool uniform = flags & FLAG_UNIFORM;
+	const unsigned long long n = uniform ? 1ULL : (unsigned long long)__popc(pred_mask);
+
+	// warp-aggregated counting: the leader reserves n indices, every thread
+	// takes base + its rank among the predicate-true lanes
+	unsigned long long base = 0;
+	if (lane == leader) base = atomicAdd((unsigned long long *)&counters[ctr], n);
+	base = __shfl_sync(pred_mask, base, leader);
+
+	if (uniform && lane != leader) return; // a uniform instruction is one instance per warp
+	const unsigned long long myIdx = base + (uniform ? 0 : __popc(pred_mask & ((1u << lane) - 1)));
+
+	if (myIdx == inj_info->instID) {
+		inj_info->selPcOffset = offset;
+		inj_info->selCtaFlat = get_flat_cta();
+		inj_info->selTidInCta = get_flat_tid_in_cta();
+		inj_info->opcode = opcode;
+		__threadfence();
+		inj_info->selected = true;
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AFTER: corrupt one destination of the selected instance
+// ---------------------------------------------------------------------------
+extern "C" __device__ __noinline__ void inject_error(uint64_t piinfo, uint64_t pverbose_device,
+		int offset, uint32_t gprRange, uint32_t prMask, uint32_t urRange, uint32_t upMask, int regval) {
+	inj_info_t* inj_info = (inj_info_t*)piinfo;
+	uint32_t verbose_device = *((uint32_t *)pverbose_device);
+
+	if (!inj_info->selected || inj_info->errorInjected) return;
+	if (offset != inj_info->selPcOffset) return;
+	if (get_flat_cta() != inj_info->selCtaFlat || get_flat_tid_in_cta() != inj_info->selTidInCta) return;
+
+	const int igid = inj_info->groupID;
+	const int gBase = gprRange >> 8, nG = gprRange & 0xff;
+	const int uBase = urRange >> 8, nU = urRange & 0xff;
+	int nP = __popc(prMask), nUP = __popc(upMask);
+	// candidate destinations for the selected group
+	int candG = nG, candP = nP, candU = nU, candUP = nUP;
+	if (igid == G_GP) { candP = 0; candU = 0; candUP = 0; }
+	else if (igid == G_GPPR) { candU = 0; candUP = 0; }
+	const int total = candG + candP + candU + candUP;
+
+	inj_info->pcOffset = offset;
+	inj_info->tid = get_flat_tid();
+	inj_info->ctaFlat = get_flat_cta();
+	inj_info->smID = get_smid();
+	inj_info->warpID = get_warpid();
+	inj_info->laneID = get_laneid();
+	inj_info->debug[0] = 1;
+
+	if (total == 0) { // should not happen: eligibility guarantees a destination
+		inj_info->regType = -1;
+		inj_info->errorInjected = true;
+		return;
+	}
+
+	int d = min((int)(total * inj_info->opIDSeed), total - 1);
+
+	if (d < candG) {                                   // ---- GPR ----
+		int r = gBase + d;
+		if (verbose_device) {
+			inj_info->debug[1] = regval;                // value passed by NVBit for the first dest
+			inj_info->debug[2] = nvbit_read_reg((uint64_t)gBase);
+			inj_info->debug[3] = gBase;
+		}
+		unsigned int before = nvbit_read_reg((uint64_t)r);
+		unsigned int mask = get_mask(inj_info->bitFlipModel, inj_info->bitIDSeed, before);
+		inj_info->regType = REG_GPR;
+		inj_info->regNo = r;
+		inj_info->beforeVal = before;
+		inj_info->mask = mask;
+		inj_info->afterVal = DUMMY ? before : (before ^ mask);
+		if (!DUMMY) nvbit_write_reg((uint64_t)r, inj_info->afterVal);
+	} else if ((d -= candG) < candP) {                 // ---- predicate P0-P6 ----
+		int p = nth_set_bit(prMask, d);
+		unsigned int before = (unsigned int)nvbit_read_pred_reg();
+		unsigned int bit = corrupt_pred_bit(inj_info->bitFlipModel, inj_info->bitIDSeed, (before >> p) & 1u);
+		unsigned int after = (before & ~(1u << p)) | (bit << p);
+		inj_info->regType = REG_PR;
+		inj_info->regNo = p;
+		inj_info->beforeVal = before;
+		inj_info->mask = before ^ after;
+		inj_info->afterVal = DUMMY ? before : after;
+		if (!DUMMY) nvbit_write_pred_reg((int32_t)after);
+	} else if ((d -= candP) < candU) {                 // ---- uniform register ----
+		int r = uBase + d;
+		unsigned int before = nvbit_read_ureg((uint64_t)r);
+		unsigned int mask = get_mask(inj_info->bitFlipModel, inj_info->bitIDSeed, before);
+		inj_info->regType = REG_UR;
+		inj_info->regNo = r;
+		inj_info->beforeVal = before;
+		inj_info->mask = mask;
+		inj_info->afterVal = DUMMY ? before : (before ^ mask);
+		if (!DUMMY) nvbit_write_ureg((uint64_t)r, inj_info->afterVal);
+	} else {                                           // ---- uniform predicate UP0-UP6 ----
+		d -= candU;
+		int p = nth_set_bit(upMask, d);
+		unsigned int before = (unsigned int)nvbit_read_upred_reg();
+		unsigned int bit = corrupt_pred_bit(inj_info->bitFlipModel, inj_info->bitIDSeed, (before >> p) & 1u);
+		unsigned int after = (before & ~(1u << p)) | (bit << p);
+		inj_info->regType = REG_UP;
+		inj_info->regNo = p;
+		inj_info->beforeVal = before;
+		inj_info->mask = before ^ after;
+		inj_info->afterVal = DUMMY ? before : after;
+		if (!DUMMY) nvbit_write_upred_reg((int32_t)after);
+	}
+	__threadfence();
+	inj_info->errorInjected = true;
+	if (verbose_device)
+		printf("NVBitFI: injected regType=%d reg=%d before=0x%x after=0x%x pc=0x%x tid=%d sm=%d\n",
+				inj_info->regType, inj_info->regNo, inj_info->beforeVal, inj_info->afterVal, offset, inj_info->tid, inj_info->smID);
+}

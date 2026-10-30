@@ -24,8 +24,9 @@
 #include "arch.h"
 
 
-extern "C" __device__ __noinline__ void inject_error(uint64_t piinfo, uint64_t pverbose_device, int destGPRNum, int regval, int numDestGPRs, int maxRegs) {
+extern "C" __device__ __noinline__ void inject_error(uint64_t piinfo, uint64_t pverbose_device, int destGPRNum, int regval, int numDestGPRs, int maxRegs, int predicate) {
 
+				if (!predicate) return; // instruction predicated out: it did not write its destination
 				inj_info_t* inj_info = (inj_info_t*)piinfo; 
 				uint32_t verbose_device = *((uint32_t *)pverbose_device);
 
